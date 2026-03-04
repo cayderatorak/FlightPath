@@ -36,9 +36,11 @@ def get_redirect_url():
 
 redirect_url = get_redirect_url()
 
-# Fetch session after redirect
+# Correct session retrieval
 session_resp = supabase.auth.get_session()
-session_data = session_resp.get("data", {}).get("session", None)
+
+# .data is already a dictionary
+session_data = session_resp.data.get("session") if session_resp.data else None
 user_data = session_data.get("user") if session_data else None
 
 if st.session_state.user is None and user_data is not None:
