@@ -3,7 +3,6 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 from supabase import create_client, Client
-import os
 
 # -----------------------
 # Supabase Setup
@@ -15,43 +14,29 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 # -----------------------
 # Streamlit Page Config
 # -----------------------
-st.set_page_config(
-    page_title="FlightPath",  # Browser tab title
-    layout="wide"
-)
+st.set_page_config(page_title="FlightPath", layout="wide")
 st.title("FlightPath")
 
 # -----------------------
-# Session & Login Setup
+# Session & Login Handling
 # -----------------------
 if "user" not in st.session_state:
     st.session_state.user = None
 
-def get_redirect_url():
-    if os.environ.get("STREAMLIT_SERVER_RUN_ID"):
-        # Replace with your Streamlit app URL if deploying publicly
-        return "https://share.streamlit.io/<username>/<repo-name>/main/app.py"
-    else:
-        return "http://localhost:8501"
-
-redirect_url = get_redirect_url()
-
-# Correct session retrieval
+# Get current session
 session_resp = supabase.auth.get_session()
+session_data = session_resp.session  # None if not logged in
+user_data = session_data.user if session_data else None
 
-# .data is already a dictionary
-session_data = session_resp.data.get("session") if session_resp.data else None
-user_data = session_data.get("user") if session_data else None
-
+# Store user in session state
 if st.session_state.user is None and user_data is not None:
     st.session_state.user = user_data
 
-# -----------------------
-# Login screen with rate-limit handling
-# -----------------------
+# Show login form if not logged in
 if st.session_state.user is None:
     st.header("Login to FlightPath")
     email = st.text_input("Enter your email")
+    redirect_url = "https://flightpath.streamlit.app"  # your deployed app URL
 
     if st.button("Send Magic Link"):
         try:
@@ -66,14 +51,13 @@ if st.session_state.user is None:
                 st.warning("Too many requests! Please wait a few minutes before trying again.")
             else:
                 st.error(f"Failed to send magic link: {e}")
-    st.stop()
+    st.stop()  # Stop app until login
 
-# -----------------------
-# User is logged in
-# -----------------------
+# Logged-in user
 user = st.session_state.user
-user_id = user["id"]
+user_id = user.id
 
+# Logout button
 if st.sidebar.button("Logout"):
     supabase.auth.sign_out()
     st.session_state.user = None
@@ -109,13 +93,7 @@ def delete_flight(flight_id):
     supabase.table("flights").delete().eq("id", flight_id).execute()
 
 def get_flights():
-    response = (
-        supabase.table("flights")
-        .select("*")
-        .eq("student_id", user_id)
-        .order("date", desc=False)
-        .execute()
-    )
+    response = supabase.table("flights").select("*").eq("student_id", user_id).order("date", desc=False).execute()
     data = response.data if response.data else []
     df = pd.DataFrame(data)
     for col in ["id","student_id","date","flight_type","duration","instructor","is_xc","is_night","cost_per_hour","created_at"]:
@@ -169,7 +147,7 @@ def estimate_remaining_cost(totals, targets, avg_cost_per_hour):
     return remaining_hours*avg_cost_per_hour
 
 # -----------------------
-# Streamlit Layout
+# Streamlit Sidebar
 # -----------------------
 st.sidebar.header("Default Cost per Hour ($/hr)")
 cost_dual = st.sidebar.number_input("Dual", value=180.0, step=1.0)
@@ -214,7 +192,9 @@ if csv_file:
 
 planned_hours_per_week = st.sidebar.number_input("Planned Flight Hours / Week", min_value=0.0, step=1.0)
 
-# Main dashboard
+# -----------------------
+# Main Dashboard
+# -----------------------
 df = get_flights()
 totals,costs = calculate_totals(df)
 remaining,status = calculate_remaining(totals,targets)
