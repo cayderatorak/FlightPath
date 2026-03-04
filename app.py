@@ -5,6 +5,12 @@ from datetime import datetime, timedelta
 from supabase import create_client, Client
 
 # -----------------------
+# Streamlit Page Config
+# -----------------------
+st.set_page_config(page_title="FlightPath", layout="wide")
+st.title("FlightPath")
+
+# -----------------------
 # Supabase Setup
 # -----------------------
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
@@ -13,48 +19,91 @@ SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # -----------------------
-# Helper Functions
+# Helper Functions (Safe)
 # -----------------------
 def add_flight(date, flight_type, duration, instructor, is_xc, is_night, cost_per_hour):
-    supabase.table("flights").insert({
-        "date": date,
-        "flight_type": flight_type,
-        "duration": float(duration),
-        "instructor": instructor,
-        "is_xc": bool(is_xc),
-        "is_night": bool(is_night),
-        "cost_per_hour": float(cost_per_hour)
-    }).execute()
+    try:
+        duration = float(duration) if duration is not None else 0.0
+        cost_per_hour = float(cost_per_hour) if cost_per_hour is not None else 0.0
+        is_xc = bool(is_xc)
+        is_night = bool(is_night)
+        instructor = instructor if instructor else ""
+
+        st.write(f"Adding flight: {date}, {flight_type}, {duration}h, {instructor}, XC={is_xc}, Night={is_night}, ${cost_per_hour}/hr")
+
+        response = supabase.table("flights").insert({
+            "date": date,
+            "flight_type": flight_type,
+            "duration": duration,
+            "instructor": instructor,
+            "is_xc": is_xc,
+            "is_night": is_night,
+            "cost_per_hour": cost_per_hour
+        }).execute()
+
+        if hasattr(response, "error") and response.error:
+            st.error(f"Supabase insert error: {response.error}")
+        else:
+            st.success("Flight added successfully!")
+
+    except Exception as e:
+        st.error(f"Error adding flight: {e}")
 
 def update_flight(flight_id, date, flight_type, duration, instructor, is_xc, is_night, cost_per_hour):
-    supabase.table("flights").update({
-        "date": date,
-        "flight_type": flight_type,
-        "duration": float(duration),
-        "instructor": instructor,
-        "is_xc": bool(is_xc),
-        "is_night": bool(is_night),
-        "cost_per_hour": float(cost_per_hour)
-    }).eq("id", flight_id).execute()
+    try:
+        duration = float(duration) if duration is not None else 0.0
+        cost_per_hour = float(cost_per_hour) if cost_per_hour is not None else 0.0
+        is_xc = bool(is_xc)
+        is_night = bool(is_night)
+        instructor = instructor if instructor else ""
+
+        st.write(f"Updating flight {flight_id}: {date}, {flight_type}, {duration}h")
+
+        response = supabase.table("flights").update({
+            "date": date,
+            "flight_type": flight_type,
+            "duration": duration,
+            "instructor": instructor,
+            "is_xc": is_xc,
+            "is_night": is_night,
+            "cost_per_hour": cost_per_hour
+        }).eq("id", flight_id).execute()
+
+        if hasattr(response, "error") and response.error:
+            st.error(f"Supabase update error: {response.error}")
+        else:
+            st.success("Flight updated successfully!")
+
+    except Exception as e:
+        st.error(f"Error updating flight: {e}")
 
 def delete_flight(flight_id):
-    supabase.table("flights").delete().eq("id", flight_id).execute()
+    try:
+        response = supabase.table("flights").delete().eq("id", flight_id).execute()
+        if hasattr(response, "error") and response.error:
+            st.error(f"Supabase delete error: {response.error}")
+        else:
+            st.success("Flight deleted successfully!")
+    except Exception as e:
+        st.error(f"Error deleting flight: {e}")
 
 def get_flights():
-    response = supabase.table("flights").select("*").order("date", desc=False).execute()
-    data = response.data if response.data else []
-    df = pd.DataFrame(data)
-    
-    for col in ["id","student_id","date","flight_type","duration","instructor","is_xc","is_night","cost_per_hour","created_at"]:
-        if col not in df.columns:
-            df[col] = None if col in ["id","student_id","date","flight_type","instructor","created_at"] else 0
-
-    df["is_xc"] = df["is_xc"].fillna(False).astype(bool)
-    df["is_night"] = df["is_night"].fillna(False).astype(bool)
-    df["duration"] = df["duration"].fillna(0).astype(float)
-    df["cost_per_hour"] = df["cost_per_hour"].fillna(0).astype(float)
-    
-    return df
+    try:
+        response = supabase.table("flights").select("*").order("date", desc=False).execute()
+        data = response.data if response.data else []
+        df = pd.DataFrame(data)
+        # Ensure expected columns exist
+        for col in ["id","student_id","date","flight_type","duration","instructor","is_xc","is_night","cost_per_hour","created_at"]:
+            if col not in df.columns:
+                df[col] = None if col in ["id","student_id","date","flight_type","instructor","created_at"] else 0
+        df["is_xc"] = df["is_xc"].fillna(False).astype(bool)
+        df["is_night"] = df["is_night"].fillna(False).astype(bool)
+        df["duration"] = df["duration"].fillna(0).astype(float)
+        df["cost_per_hour"] = df["cost_per_hour"].fillna(0).astype(float)
+        return df
+    except Exception as e:
+        st.error(f"Error fetching flights: {e}")
+        return pd.DataFrame()
 
 def calculate_totals(df):
     totals = {
@@ -78,57 +127,24 @@ def calculate_remaining(totals, targets):
     status = {}
     for cat in targets:
         remaining[cat] = max(targets[cat]-totals.get(cat,0),0)
-        if totals.get(cat,0) >= targets[cat]:
-            status[cat] = "🟢"
-        elif totals.get(cat,0) >= targets[cat]*0.5:
-            status[cat] = "🟡"
+        if totals.get(cat,0)>=targets[cat]:
+            status[cat]="🟢"
+        elif totals.get(cat,0)>=targets[cat]*0.5:
+            status[cat]="🟡"
         else:
-            status[cat] = "🔴"
-    return remaining, status
+            status[cat]="🔴"
+    return remaining,status
 
-def estimate_checkride_date(totals, targets, planned_hours_per_week):
-    remaining_hours = max(targets["Total"] - totals.get("Total", 0), 0)
-    if planned_hours_per_week <= 0:
+def estimate_checkride_date(totals,targets,planned_hours_per_week):
+    remaining_hours = max(targets["Total"]-totals.get("Total",0),0)
+    if planned_hours_per_week<=0:
         return "Enter weekly hours to estimate"
     est_date = datetime.today() + timedelta(weeks=remaining_hours/planned_hours_per_week)
     return est_date.strftime("%b %d, %Y")
 
 def estimate_remaining_cost(totals, targets, avg_cost_per_hour):
-    remaining_hours = max(targets["Total"] - totals.get("Total", 0), 0)
-    return remaining_hours * avg_cost_per_hour
-
-# -----------------------
-# Streamlit Layout
-# -----------------------
-st.set_page_config(page_title="FlightPath", layout="wide")
-st.title("FlightPath")
-
-# -----------------------
-# Handle Supabase Magic Link Login
-# -----------------------
-if "user" not in st.session_state:
-    st.session_state["user"] = None
-
-# Safe query param handling
-try:
-    query_params = st.experimental_get_query_params()
-except AttributeError:
-    query_params = {}
-
-# If magic link code in query params, verify it
-if "access_token" in query_params:
-    access_token = query_params.get("access_token")[0]
-    session_resp = supabase.auth.get_session(access_token)
-    st.session_state["user"] = session_resp.session if hasattr(session_resp, "session") else None
-
-# Show login if not logged in
-if st.session_state["user"] is None:
-    st.subheader("Login with your email")
-    email = st.text_input("Email")
-    if st.button("Send Magic Link"):
-        supabase.auth.sign_in_with_password({"email": email, "password": ""})  # Magic link
-        st.info("Check your email for a magic link!")
-    st.stop()
+    remaining_hours = max(targets["Total"]-totals.get("Total",0),0)
+    return remaining_hours*avg_cost_per_hour
 
 # -----------------------
 # Sidebar: Cost & Proficiency
@@ -138,14 +154,13 @@ cost_dual = st.sidebar.number_input("Dual", value=180.0, step=1.0)
 cost_solo = st.sidebar.number_input("Solo", value=120.0, step=1.0)
 xc_surcharge = st.sidebar.number_input("XC Surcharge", value=20.0, step=1.0)
 night_surcharge = st.sidebar.number_input("Night Surcharge", value=30.0, step=1.0)
-cost_defaults = {"Dual": cost_dual,"Solo": cost_solo}
+cost_defaults = {"Dual":cost_dual,"Solo":cost_solo}
 
 st.sidebar.markdown("---")
 st.sidebar.header("Proficiency Targets")
 proficiency_multiplier = st.sidebar.number_input("Proficiency Factor (1.0=FAA min, 1.25=25% extra)", value=1.25, step=0.05)
 faa_min = {"Dual":20,"Solo":10,"XC":5,"Night":3,"Total":40}
 targets = {cat:int(faa_min[cat]*proficiency_multiplier) for cat in faa_min}
-
 targets["Dual"] = st.sidebar.number_input("Target Dual Hours", value=targets["Dual"], min_value=0)
 targets["Solo"] = st.sidebar.number_input("Target Solo Hours", value=targets["Solo"], min_value=0)
 targets["XC"] = st.sidebar.number_input("Target XC Hours", value=targets["XC"], min_value=0)
@@ -153,7 +168,7 @@ targets["Night"] = st.sidebar.number_input("Target Night Hours", value=targets["
 targets["Total"] = int(faa_min["Total"] * proficiency_multiplier)
 
 # -----------------------
-# Flight Entry
+# Add Flight Entry
 # -----------------------
 st.sidebar.header("Add Flight Entry")
 date = st.sidebar.date_input("Flight Date", datetime.today())
@@ -162,12 +177,10 @@ duration = st.sidebar.number_input("Duration (hours)", min_value=0.0, step=0.1)
 instructor = st.sidebar.text_input("Instructor (optional)")
 is_xc = st.sidebar.checkbox("XC Flight")
 is_night = st.sidebar.checkbox("Night Flight")
-
 cost_per_hour = cost_defaults[flight_type] + (xc_surcharge if is_xc else 0) + (night_surcharge if is_night else 0)
 
 if st.sidebar.button("Add Flight"):
     add_flight(date.strftime("%Y-%m-%d"), flight_type, duration, instructor, is_xc, is_night, cost_per_hour)
-    st.sidebar.success(f"Flight Added! ${cost_per_hour}/hr")
 
 # -----------------------
 # CSV Import
@@ -177,8 +190,15 @@ csv_file = st.sidebar.file_uploader("Upload CSV (date,flight_type,duration,instr
 if csv_file:
     imported_df = pd.read_csv(csv_file)
     for _, row in imported_df.iterrows():
-        add_flight(str(row['date']), row['flight_type'], float(row['duration']), row.get('instructor',''),
-                   int(row.get('is_xc',0)), int(row.get('is_night',0)), float(row.get('cost_per_hour', cost_defaults.get(row['flight_type'],0))))
+        add_flight(
+            str(row['date']),
+            row['flight_type'],
+            float(row['duration']),
+            row.get('instructor',''),
+            int(row.get('is_xc',0)),
+            int(row.get('is_night',0)),
+            float(row.get('cost_per_hour', cost_defaults.get(row['flight_type'],0)))
+        )
     st.sidebar.success(f"Imported {len(imported_df)} flights!")
 
 planned_hours_per_week = st.sidebar.number_input("Planned Flight Hours / Week", min_value=0.0, step=1.0)
@@ -238,10 +258,8 @@ if not df.empty:
         with col1:
             if st.button("Update Flight"):
                 update_flight(flight_id,new_date.strftime("%Y-%m-%d"),new_type,new_duration,new_instructor,new_is_xc,new_is_night,new_cost)
-                st.success("Flight Updated!")
         with col2:
             if st.button("Delete Flight"):
                 delete_flight(flight_id)
-                st.success("Flight Deleted!")
 else:
     st.write("No flights yet.")
