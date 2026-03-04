@@ -234,24 +234,42 @@ st.write(f"Projected Total Cost: **${costs['Total']+est_remaining_cost:.2f}**")
 # Edit/Delete Flights
 # -----------------------
 st.subheader("Edit or Delete Existing Flights")
+
 if not df.empty:
-    flight_options = df.apply(lambda x: f"{x['id']}: {x['date']} | {x['flight_type']} | {x['duration']}h | ${x['cost_per_hour']}/hr | XC:{x['is_xc']} | Night:{x['is_night']} | {x['instructor']}", axis=1).tolist()
-    selected = st.selectbox("Select a flight to edit/delete", [""] + flight_options)
-    if selected:
-        flight_id = selected.split(":")[0]
-        row = df[df['id']==flight_id].iloc[0]
-        new_date = st.date_input("Flight Date", datetime.strptime(row['date'],"%Y-%m-%d"))
-        new_type = st.selectbox("Flight Type", ["Dual","Solo"], index=["Dual","Solo"].index(row['flight_type']))
+    # Create a mapping: readable description -> flight id
+    flight_map = {
+        f"{x['date']} | {x['flight_type']} | {x['duration']}h | ${x['cost_per_hour']}/hr | XC:{x['is_xc']} | Night:{x['is_night']} | {x['instructor']}": x['id']
+        for _, x in df.iterrows()
+    }
+
+    # Show only readable info in dropdown
+    selected_desc = st.selectbox("Select a flight to edit/delete", [""] + list(flight_map.keys()))
+
+    if selected_desc:
+        flight_id = flight_map[selected_desc]  # hidden internal ID
+        row = df[df['id'] == flight_id].iloc[0]
+
+        new_date = st.date_input("Flight Date", datetime.strptime(row['date'], "%Y-%m-%d"))
+        new_type = st.selectbox("Flight Type", ["Dual", "Solo"], index=["Dual", "Solo"].index(row['flight_type']))
         new_duration = st.number_input("Duration (hours)", min_value=0.0, step=0.1, value=float(row['duration']))
         new_instructor = st.text_input("Instructor", value=row['instructor'] if row['instructor'] else "")
         new_is_xc = st.checkbox("XC Flight", value=bool(row['is_xc']))
         new_is_night = st.checkbox("Night Flight", value=bool(row['is_night']))
         new_cost = st.number_input("Cost per Hour ($)", min_value=0.0, step=1.0, value=float(row['cost_per_hour']))
 
-        col1,col2 = st.columns(2)
+        col1, col2 = st.columns(2)
         with col1:
             if st.button("Update Flight"):
-                update_flight(flight_id,new_date.strftime("%Y-%m-%d"),new_type,new_duration,new_instructor,new_is_xc,new_is_night,new_cost)
+                update_flight(
+                    flight_id,
+                    new_date.strftime("%Y-%m-%d"),
+                    new_type,
+                    new_duration,
+                    new_instructor,
+                    new_is_xc,
+                    new_is_night,
+                    new_cost
+                )
         with col2:
             if st.button("Delete Flight"):
                 delete_flight(flight_id)
