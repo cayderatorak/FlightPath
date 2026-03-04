@@ -23,16 +23,25 @@ st.title("FlightPath")
 if "user" not in st.session_state:
     st.session_state.user = None
 
-# Get current session
+# Safe session retrieval
 session_resp = supabase.auth.get_session()
-session_data = session_resp.session  # None if not logged in
-user_data = session_data.user if session_data else None
 
-# Store user in session state
+if hasattr(session_resp, "session"):
+    session_data = session_resp.session
+elif hasattr(session_resp, "data") and session_resp.data:
+    session_data = session_resp.data.get("session")
+else:
+    session_data = None
+
+user_data = None
+if session_data and hasattr(session_data, "user"):
+    user_data = session_data.user
+
+# Store logged-in user
 if st.session_state.user is None and user_data is not None:
     st.session_state.user = user_data
 
-# Show login form if not logged in
+# Show login if not logged in
 if st.session_state.user is None:
     st.header("Login to FlightPath")
     email = st.text_input("Enter your email")
@@ -51,11 +60,11 @@ if st.session_state.user is None:
                 st.warning("Too many requests! Please wait a few minutes before trying again.")
             else:
                 st.error(f"Failed to send magic link: {e}")
-    st.stop()  # Stop app until login
+    st.stop()  # Stop until login
 
 # Logged-in user
 user = st.session_state.user
-user_id = user.id
+user_id = user.id if user else None
 
 # Logout button
 if st.sidebar.button("Logout"):
@@ -147,7 +156,7 @@ def estimate_remaining_cost(totals, targets, avg_cost_per_hour):
     return remaining_hours*avg_cost_per_hour
 
 # -----------------------
-# Streamlit Sidebar
+# Sidebar Config
 # -----------------------
 st.sidebar.header("Default Cost per Hour ($/hr)")
 cost_dual = st.sidebar.number_input("Dual", value=180.0, step=1.0)
