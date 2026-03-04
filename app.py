@@ -28,10 +28,12 @@ def get_redirect_url():
 redirect_url = get_redirect_url()
 
 # Fetch session after redirect
-if st.session_state.user is None:
-    session = supabase.auth.get_session()
-    if session.session is not None:
-        st.session_state.user = session.session.user
+# New: works with current Supabase client
+session_resp = supabase.auth.get_session()
+session_data = session_resp.session  # this is None if not logged in
+
+if session_data is not None:
+    st.session_state.user = session_data.user
 
 # Login screen with rate-limit handling
 if st.session_state.user is None:
