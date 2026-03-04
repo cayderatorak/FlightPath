@@ -33,7 +33,7 @@ if st.session_state.user is None:
     if session.session is not None:
         st.session_state.user = session.session.user
 
-# Login screen
+# Login screen with rate-limit handling
 if st.session_state.user is None:
     st.title("Login to Checkride Tracker")
     email = st.text_input("Enter your email")
@@ -46,8 +46,15 @@ if st.session_state.user is None:
             })
             st.success("Magic link sent! Open it in the same browser.")
         except Exception as e:
-            st.error(f"Failed to send magic link: {e}")
-    st.stop()  # stop the app until login
+            # Detect rate limit error
+            error_msg = str(e)
+            if "rate limit" in error_msg.lower():
+                st.warning(
+                    "Too many requests! Please wait a few minutes before trying again."
+                )
+            else:
+                st.error(f"Failed to send magic link: {e}")
+    st.stop()  # stop the app until user logs in
 
 # User is logged in
 user = st.session_state.user
