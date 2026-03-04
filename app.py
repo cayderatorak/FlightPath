@@ -4,6 +4,12 @@ import pandas as pd
 from datetime import datetime, timedelta
 from supabase import create_client, Client
 
+# Safely get query parameters
+try:
+    query_params = st.experimental_get_query_params()
+except Exception:
+    query_params = {}
+
 # -----------------------
 # Supabase Setup
 # -----------------------
