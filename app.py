@@ -13,14 +13,23 @@ SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # -----------------------
+# Streamlit Page Config
+# -----------------------
+st.set_page_config(
+    page_title="FlightPath",  # Browser tab title
+    layout="wide"
+)
+st.title("FlightPath")
+
+# -----------------------
 # Session & Login Setup
 # -----------------------
 if "user" not in st.session_state:
     st.session_state.user = None
 
-# Determine redirect URL
 def get_redirect_url():
     if os.environ.get("STREAMLIT_SERVER_RUN_ID"):
+        # Replace with your Streamlit app URL if deploying publicly
         return "https://share.streamlit.io/<username>/<repo-name>/main/app.py"
     else:
         return "http://localhost:8501"
@@ -28,16 +37,18 @@ def get_redirect_url():
 redirect_url = get_redirect_url()
 
 # Fetch session after redirect
-# New: works with current Supabase client
 session_resp = supabase.auth.get_session()
-session_data = session_resp.session  # this is None if not logged in
+session_data = session_resp.get("data", {}).get("session", None)
+user_data = session_data.get("user") if session_data else None
 
-if session_data is not None:
-    st.session_state.user = session_data.user
+if st.session_state.user is None and user_data is not None:
+    st.session_state.user = user_data
 
+# -----------------------
 # Login screen with rate-limit handling
+# -----------------------
 if st.session_state.user is None:
-    st.title("Login to Checkride Tracker")
+    st.header("Login to FlightPath")
     email = st.text_input("Enter your email")
 
     if st.button("Send Magic Link"):
@@ -48,21 +59,19 @@ if st.session_state.user is None:
             })
             st.success("Magic link sent! Open it in the same browser.")
         except Exception as e:
-            # Detect rate limit error
             error_msg = str(e)
             if "rate limit" in error_msg.lower():
-                st.warning(
-                    "Too many requests! Please wait a few minutes before trying again."
-                )
+                st.warning("Too many requests! Please wait a few minutes before trying again.")
             else:
                 st.error(f"Failed to send magic link: {e}")
-    st.stop()  # stop the app until user logs in
+    st.stop()
 
+# -----------------------
 # User is logged in
+# -----------------------
 user = st.session_state.user
-user_id = user.id
+user_id = user["id"]
 
-# Logout
 if st.sidebar.button("Logout"):
     supabase.auth.sign_out()
     st.session_state.user = None
@@ -160,10 +169,6 @@ def estimate_remaining_cost(totals, targets, avg_cost_per_hour):
 # -----------------------
 # Streamlit Layout
 # -----------------------
-st.set_page_config(layout="wide")
-st.title("Checkride Prep Tracker with Proficiency & Cost")
-
-# Sidebar: Costs & Proficiency
 st.sidebar.header("Default Cost per Hour ($/hr)")
 cost_dual = st.sidebar.number_input("Dual", value=180.0, step=1.0)
 cost_solo = st.sidebar.number_input("Solo", value=120.0, step=1.0)
@@ -182,7 +187,6 @@ targets["XC"] = st.sidebar.number_input("Target XC Hours", value=targets["XC"], 
 targets["Night"] = st.sidebar.number_input("Target Night Hours", value=targets["Night"], min_value=0)
 targets["Total"] = int(faa_min["Total"]*proficiency_multiplier)
 
-# Sidebar: Add Flight
 st.sidebar.markdown("---")
 st.sidebar.header("Add Flight Entry")
 date = st.sidebar.date_input("Flight Date", datetime.today())
@@ -197,7 +201,6 @@ if st.sidebar.button("Add Flight"):
     add_flight(date.strftime("%Y-%m-%d"), flight_type, duration, instructor, is_xc, is_night, cost_per_hour)
     st.sidebar.success(f"Flight Added! ${cost_per_hour}/hr")
 
-# Sidebar: Bulk CSV Import
 st.sidebar.header("Bulk Import Flights (CSV)")
 csv_file = st.sidebar.file_uploader("Upload CSV (date,flight_type,duration,instructor,is_xc,is_night,cost_per_hour)", type=["csv"])
 if csv_file:
@@ -209,7 +212,7 @@ if csv_file:
 
 planned_hours_per_week = st.sidebar.number_input("Planned Flight Hours / Week", min_value=0.0, step=1.0)
 
-# Main Dashboard
+# Main dashboard
 df = get_flights()
 totals,costs = calculate_totals(df)
 remaining,status = calculate_remaining(totals,targets)
