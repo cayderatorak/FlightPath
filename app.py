@@ -23,9 +23,24 @@ st.title("FlightPath")
 if "user" not in st.session_state:
     st.session_state.user = None
 
-# Safe session retrieval
-session_resp = supabase.auth.get_session()
+# 1️⃣ Capture magic link tokens from URL if present
+query_params = st.experimental_get_query_params()
+if "access_token" in query_params:
+    token = query_params["access_token"][0]
+    refresh_token = query_params.get("refresh_token", [None])[0]
 
+    try:
+        supabase.auth.set_session({
+            "access_token": token,
+            "refresh_token": refresh_token
+        })
+        st.experimental_rerun()  # reload page with session now set
+    except Exception as e:
+        st.error(f"Failed to set session: {e}")
+        st.stop()
+
+# 2️⃣ Safe session retrieval
+session_resp = supabase.auth.get_session()
 if hasattr(session_resp, "session"):
     session_data = session_resp.session
 elif hasattr(session_resp, "data") and session_resp.data:
@@ -33,19 +48,17 @@ elif hasattr(session_resp, "data") and session_resp.data:
 else:
     session_data = None
 
-user_data = None
-if session_data and hasattr(session_data, "user"):
-    user_data = session_data.user
+user_data = session_data.user if session_data and hasattr(session_data, "user") else None
 
-# Store logged-in user
+# 3️⃣ Store logged-in user in Streamlit session
 if st.session_state.user is None and user_data is not None:
     st.session_state.user = user_data
 
-# Show login if not logged in
+# 4️⃣ Show login page if no user
 if st.session_state.user is None:
     st.header("Login to FlightPath")
     email = st.text_input("Enter your email")
-    redirect_url = "https://flightpath.streamlit.app"  # your deployed app URL
+    redirect_url = "https://flightpath.streamlit.app"  # exact deployed URL, no trailing slash
 
     if st.button("Send Magic Link"):
         try:
@@ -62,7 +75,7 @@ if st.session_state.user is None:
                 st.error(f"Failed to send magic link: {e}")
     st.stop()  # Stop until login
 
-# Logged-in user
+# 5️⃣ Logged-in user
 user = st.session_state.user
 user_id = user.id if user else None
 
