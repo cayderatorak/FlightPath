@@ -6,17 +6,10 @@ from supabase import create_client, Client
 from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
 
 # -----------------------
-# Supabase setup
-# -----------------------
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_ANON_KEY = st.secrets["SUPABASE_ANON_KEY"]
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
-
-# -----------------------
-# LOGIN SYSTEM
+# LOGIN SYSTEM (fixed for latest Streamlit)
 # -----------------------
 def handle_login():
-    params = st.experimental_get_query_params()
+    params = st.query_params  # <- use st.query_params, not experimental
 
     # Handle redirect from magic link
     if "access_token" in params:
@@ -24,8 +17,8 @@ def handle_login():
         refresh_token = params.get("refresh_token", [None])[0]
         try:
             supabase.auth.set_session(access_token, refresh_token)
-            st.experimental_set_query_params()
-            st.experimental_rerun()
+            st.experimental_set_query_params()  # clear URL params
+            st.experimental_rerun()             # rerun app
         except Exception:
             st.error("Login session error")
             st.stop()
