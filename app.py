@@ -13,7 +13,7 @@ SUPABASE_ANON_KEY = st.secrets["SUPABASE_ANON_KEY"]
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
 # -----------------------
-# Tracks and targets
+# Tracks and FAA targets
 # -----------------------
 TRACKS = {
     "PPL": {"Dual": 20, "Solo": 10, "XC": 5, "Night": 3, "Total": 40},
@@ -86,7 +86,17 @@ st.set_page_config(layout="wide", page_title="FlightPath")
 st.title("FlightPath")
 
 # -----------------------
-# Sidebar: login
+# Session state
+# -----------------------
+if 'dual_cost' not in st.session_state:
+    st.session_state['dual_cost'] = 180.0
+if 'solo_cost' not in st.session_state:
+    st.session_state['solo_cost'] = 120.0
+if 'edit_row' not in st.session_state:
+    st.session_state['edit_row'] = None
+
+# -----------------------
+# Sidebar: Magic Link Login
 # -----------------------
 st.sidebar.header("Login / Magic Link")
 email = st.sidebar.text_input("Email")
@@ -97,23 +107,18 @@ if st.sidebar.button("Send Magic Link"):
     except Exception as e:
         err_msg = str(e)
         if "rate limit" in err_msg.lower():
-            st.sidebar.error("You are sending too many requests. Wait a minute before retrying.")
+            st.sidebar.error("Too many requests. Wait a minute before retrying.")
         else:
             st.sidebar.error(f"Error sending link: {err_msg}")
 
 # -----------------------
-# Track selection
+# Sidebar: Track selection
 # -----------------------
 track_selected = st.sidebar.selectbox("Select Track", list(TRACKS.keys()))
 
 # -----------------------
-# Persistent sidebar costs
+# Sidebar: Cost and Weekly Hours
 # -----------------------
-if 'dual_cost' not in st.session_state:
-    st.session_state['dual_cost'] = 180.0
-if 'solo_cost' not in st.session_state:
-    st.session_state['solo_cost'] = 120.0
-
 st.sidebar.header("Cost per Hour ($)")
 st.session_state['dual_cost'] = st.sidebar.number_input(
     "Dual", value=st.session_state['dual_cost'], step=1.0, format="%.2f"
@@ -121,16 +126,12 @@ st.session_state['dual_cost'] = st.sidebar.number_input(
 st.session_state['solo_cost'] = st.sidebar.number_input(
     "Solo", value=st.session_state['solo_cost'], step=1.0, format="%.2f"
 )
-
-# -----------------------
-# Planned weekly hours
-# -----------------------
 planned_hours_per_week = st.sidebar.number_input(
     "Planned Flight Hours / Week", min_value=0.0, step=1.0, format="%.1f"
 )
 
 # -----------------------
-# Add flight entry
+# Sidebar: Add Flight
 # -----------------------
 st.sidebar.header("Add Flight Entry")
 date = st.sidebar.date_input("Flight Date", datetime.today())
@@ -140,7 +141,6 @@ instructor = st.sidebar.text_input("Instructor (optional)")
 is_xc = st.sidebar.checkbox("XC Flight")
 is_night = st.sidebar.checkbox("Night Flight")
 
-# Dynamic cost per hour
 cost_per_hour = float(st.session_state['dual_cost'] if flight_type=="Dual" else st.session_state['solo_cost'])
 cost_per_hour += 20.0 if is_xc else 0.0
 cost_per_hour += 30.0 if is_night else 0.0
@@ -157,10 +157,10 @@ if st.sidebar.button("Add Flight"):
         "track": track_selected
     }).execute()
     st.sidebar.success(f"Flight Added! ${cost_per_hour:.2f}/hr")
-    st.experimental_rerun()  # Update UI immediately
+    st.experimental_rerun()
 
 # -----------------------
-# CSV upload / re-import
+# Sidebar: Upload CSV
 # -----------------------
 st.sidebar.header("Re-upload Flights (CSV)")
 uploaded_file = st.sidebar.file_uploader("Upload CSV", type="csv")
@@ -181,7 +181,7 @@ if uploaded_file:
     st.experimental_rerun()
 
 # -----------------------
-# Fetch flights and calculate
+# Fetch Flights & Calculations
 # -----------------------
 df = get_flights(track_selected)
 totals, costs = calculate_totals(df)
@@ -191,7 +191,7 @@ est_checkride = estimate_checkride_date(totals, TRACKS[track_selected], planned_
 est_remaining_cost = estimate_remaining_cost(totals, TRACKS[track_selected], avg_cost_per_hour)
 
 # -----------------------
-# Dashboard cards
+# Dashboard Cards
 # -----------------------
 st.subheader("🛫 Flight Progress & Costs")
 col1, col2, col3, col4 = st.columns(4)
@@ -201,12 +201,11 @@ col3.metric("💰 Total Spent", f"${costs['Total']:.2f}")
 col4.metric("💰 Remaining Cost", f"${est_remaining_cost:.2f}")
 
 # -----------------------
-# Progress bars with colors
+# Progress Bars
 # -----------------------
 st.subheader("Progress by Category")
 for cat in ["Dual","Solo","XC","Night"]:
-    percent = (totals[cat]/TRACKS[track_selected][cat])*100
-    percent = min(percent, 100)
+    percent = min((totals[cat]/TRACKS[track_selected][cat])*100, 100)
     bar_color = "green" if status[cat]=="🟢" else "yellow" if status[cat]=="🟡" else "red"
     st.markdown(f"**{cat}**: {totals[cat]:.1f}/{TRACKS[track_selected][cat]} hours")
     st.markdown(f"""
@@ -225,33 +224,61 @@ for cat in ["Dual","Solo","XC","Night"]:
         """, unsafe_allow_html=True)
 
 # -----------------------
-# Flight log table with edit/delete and CSV export
+# Flight Log Table with Edit/Delete
 # -----------------------
 st.subheader("✈️ Flight Log")
-
 if not df.empty:
     df_display = df.copy()
-    df_display.index = range(len(df_display))  # Simplify index for edit/delete buttons
+    df_display.index = range(len(df_display))
+
     for idx, row in df_display.iterrows():
-        col1, col2, col3, col4, col5 = st.columns([1,1,1,1,1])
-        with col1:
-            st.text(row['date'])
-        with col2:
-            st.text(row['flight_type'])
-        with col3:
-            st.text(f"{row['duration']:.1f}")
-        with col4:
-            st.text(f"${row['cost_per_hour']:.2f}")
-        with col5:
+        cols = st.columns([1,1,1,1,2])
+        with cols[0]: st.text(row['date'])
+        with cols[1]: st.text(row['flight_type'])
+        with cols[2]: st.text(f"{row['duration']:.1f}")
+        with cols[3]: st.text(f"${row['cost_per_hour']:.2f}")
+        with cols[4]:
             if st.button(f"Delete {idx}"):
-                supabase.table("flights").delete().eq("date", row['date']).eq("flight_type", row['flight_type']).eq("track", track_selected).execute()
+                supabase.table("flights").delete() \
+                    .eq("date", row['date']).eq("flight_type", row['flight_type']) \
+                    .eq("track", track_selected).execute()
                 st.experimental_rerun()
             if st.button(f"Edit {idx}"):
                 st.session_state['edit_row'] = idx
                 st.experimental_rerun()
-    
-    # CSV export
     csv = df.to_csv(index=False).encode('utf-8')
     st.download_button("Download Flight Log CSV", data=csv, file_name=f"{track_selected}_flights.csv", mime="text/csv")
 else:
     st.write("No flights logged yet.")
+
+# -----------------------
+# Edit Flight Form
+# -----------------------
+if st.session_state['edit_row'] is not None:
+    row = df.iloc[st.session_state['edit_row']]
+    st.sidebar.header("Edit Flight Entry")
+    edit_date = st.sidebar.date_input("Flight Date", pd.to_datetime(row['date']))
+    edit_type = st.sidebar.selectbox("Flight Type", ["Dual","Solo"], index=0 if row['flight_type']=="Dual" else 1)
+    edit_duration = st.sidebar.number_input("Duration (hours)", value=float(row['duration']), step=0.1, format="%.1f")
+    edit_instructor = st.sidebar.text_input("Instructor", value=row['instructor'])
+    edit_is_xc = st.sidebar.checkbox("XC Flight", value=row['is_xc'])
+    edit_is_night = st.sidebar.checkbox("Night Flight", value=row['is_night'])
+
+    edit_cost_per_hour = float(st.session_state['dual_cost'] if edit_type=="Dual" else st.session_state['solo_cost'])
+    edit_cost_per_hour += 20.0 if edit_is_xc else 0.0
+    edit_cost_per_hour += 30.0 if edit_is_night else 0.0
+
+    if st.sidebar.button("Save Changes"):
+        supabase.table("flights").update({
+            "date": edit_date.strftime("%Y-%m-%d"),
+            "flight_type": edit_type,
+            "duration": float(edit_duration),
+            "instructor": edit_instructor,
+            "is_xc": bool(edit_is_xc),
+            "is_night": bool(edit_is_night),
+            "cost_per_hour": float(edit_cost_per_hour)
+        }).eq("date", row['date']).eq("flight_type", row['flight_type']) \
+          .eq("track", track_selected).execute()
+        st.sidebar.success("Flight updated!")
+        st.session_state['edit_row'] = None
+        st.experimental_rerun()
