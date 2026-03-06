@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import plotly.express as px
 from datetime import date, timedelta
 from supabase import create_client
 
@@ -17,13 +18,13 @@ SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # -------------------------
-# Initialize session_state for rerun
+# Session state for rerun
 # -------------------------
 if 'rerun_trigger' not in st.session_state:
     st.session_state['rerun_trigger'] = 0
 
 # -------------------------
-# FAA Requirements
+# FAA minimums
 # -------------------------
 FAA_TOTAL = 40
 FAA_DUAL = 20
@@ -32,7 +33,7 @@ FAA_XC = 5
 FAA_NIGHT = 3
 
 # -------------------------
-# Sidebar: Cost Defaults & Navigation
+# Sidebar: Navigation & Inputs
 # -------------------------
 st.sidebar.title("Navigation")
 page = st.sidebar.radio("Go to", ["Dashboard", "Log Flight", "Flight Log", "Reports"])
@@ -46,7 +47,7 @@ night_surcharge = st.sidebar.number_input("Night Surcharge", value=15.0, step=1.
 planned_hours_per_week = st.sidebar.number_input("Planned Flight Hours / Week", min_value=0.0, step=1.0)
 
 # -------------------------
-# Load flights from Supabase
+# Load flights
 # -------------------------
 def load_flights():
     resp = supabase.table("flights").select("*").execute()
@@ -106,7 +107,7 @@ if page=="Dashboard":
 
     st.divider()
 
-    # FAA Progress
+    # FAA Progress Bars
     st.subheader("FAA Requirement Progress")
     def color_progress(value,max_value):
         percent=value/max_value
@@ -121,6 +122,19 @@ if page=="Dashboard":
     color_progress(xc_hours, FAA_XC)
     color_progress(night_hours, FAA_NIGHT)
     color_progress(total_hours, FAA_TOTAL)
+
+    st.divider()
+
+    # Flight type distribution chart
+    if not df.empty:
+        fig = px.pie(df, names="flight_type", values="duration", title="Flight Type Distribution")
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Cumulative hours over time
+        df_sorted = df.sort_values("date")
+        df_cum = df_sorted.groupby("date")["duration"].sum().cumsum().reset_index()
+        fig2 = px.line(df_cum, x="date", y="duration", title="Cumulative Hours Over Time")
+        st.plotly_chart(fig2, use_container_width=True)
 
 # -------------------------
 # Log Flight
@@ -152,7 +166,7 @@ if page=="Log Flight":
                 "cost_per_hour":base_cost
             }).execute()
             st.success(f"Flight logged! ${base_cost}/hr")
-            st.session_state['rerun_trigger'] += 1  # trigger rerun
+            st.session_state['rerun_trigger'] += 1
 
 # -------------------------
 # Editable Flight Log
