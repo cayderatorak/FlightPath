@@ -1,21 +1,10 @@
+# app.py
 import streamlit as st
 import pandas as pd
 import altair as alt
 from datetime import datetime, timedelta
 from supabase import create_client
 from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
-
-# --------------------------------------------------
-# LOAD SECRETS
-# --------------------------------------------------
-SUPABASE_URL = st.secrets.get("SUPABASE_URL") or os.getenv("SUPABASE_URL")
-SUPABASE_KEY = st.secrets.get("SUPABASE_ANON_KEY") or os.getenv("SUPABASE_ANON_KEY")
-
-if not SUPABASE_URL or not SUPABASE_KEY:
-    st.error("Supabase keys not found! Add them to secrets.toml (Streamlit) or .env (local).")
-    st.stop()
-
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # --------------------------------------------------
 # PAGE CONFIG
@@ -37,21 +26,28 @@ section[data-testid="stSidebar"] *{color:white !important;}
 """, unsafe_allow_html=True)
 
 # --------------------------------------------------
+# SUPABASE
+# --------------------------------------------------
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_KEY = st.secrets["SUPABASE_ANON_KEY"]
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# --------------------------------------------------
 # FAA TRACKS
 # --------------------------------------------------
 TRACKS = {
-    "PPL":{"Dual":20,"Solo":10,"XC":5,"Night":3,"Total":40},
-    "Instrument":{"Dual":15,"Solo":5,"XC":5,"Night":5,"Total":30},
-    "CPL":{"Dual":30,"Solo":10,"XC":10,"Night":5,"Total":50},
-    "ATP":{"Dual":20,"Solo":10,"XC":5,"Night":5,"Total":40}
+    "PPL": {"Dual":20,"Solo":10,"XC":5,"Night":3,"Total":40},
+    "Instrument": {"Dual":15,"Solo":5,"XC":5,"Night":5,"Total":30},
+    "CPL": {"Dual":30,"Solo":10,"XC":10,"Night":5,"Total":50},
+    "ATP": {"Dual":20,"Solo":10,"XC":5,"Night":5,"Total":40}
 }
 
 # --------------------------------------------------
 # SESSION STATE
 # --------------------------------------------------
-if "user" not in st.session_state: st.session_state.user = None
-if "dual_cost" not in st.session_state: st.session_state.dual_cost = 180.0
-if "solo_cost" not in st.session_state: st.session_state.solo_cost = 120.0
+if "user" not in st.session_state: st.session_state.user=None
+if "dual_cost" not in st.session_state: st.session_state.dual_cost=180.0
+if "solo_cost" not in st.session_state: st.session_state.solo_cost=120.0
 
 # --------------------------------------------------
 # AUTH
@@ -89,30 +85,17 @@ user = login()
 # DATABASE
 # --------------------------------------------------
 def load_flights(track, user_id):
-    """
-    Load flights for the given user.
-    - Ensures only the current user's flights are loaded.
-    - Shows old flights with placeholder track 'Yes (optional)'.
-    """
-    resp = supabase.table("flights")\
-        .select("*")\
-        .eq("user_id", user_id)\
-        .order("date")\
-        .execute()
-
-    data = resp.data if resp.data else []
-    df = pd.DataFrame(data)
+    """Load flights for current user, including old placeholder tracks."""
+    resp = supabase.table("flights").select("*").eq("user_id", user_id).order("date").execute()
+    df = pd.DataFrame(resp.data if resp.data else [])
 
     if df.empty:
         df = pd.DataFrame(columns=[
-            "id", "date", "flight_type", "duration",
-            "aircraft", "instructor", "is_xc", "is_night",
-            "cost_per_hour", "track"
+            "id","date","flight_type","duration","aircraft",
+            "instructor","is_xc","is_night","cost_per_hour","track"
         ])
     else:
-        # Show flights matching the current track OR old placeholder flights
         df = df[(df["track"] == track) | (df["track"] == "Yes (optional)")]
-
     return df
 
 # --------------------------------------------------
@@ -130,7 +113,7 @@ def calculate_totals(df):
 
 def estimate_checkride(totals, targets, hours_week):
     remaining = max(targets["Total"] - totals["Total"], 0)
-    if hours_week==0: return "Enter hours/week"
+    if hours_week == 0: return "Enter hours/week"
     weeks = remaining / hours_week
     date = datetime.today() + timedelta(weeks=weeks)
     return date.strftime("%b %d %Y")
@@ -142,7 +125,7 @@ st.sidebar.markdown(f"**Logged in:** {user.email}")
 
 if st.sidebar.button("Logout"):
     supabase.auth.sign_out()
-    st.session_state.user = None
+    st.session_state.user=None
     st.rerun()
 
 track = st.sidebar.selectbox("Training Track", list(TRACKS.keys()))
@@ -163,36 +146,6 @@ is_xc = st.sidebar.checkbox("XC")
 is_night = st.sidebar.checkbox("Night")
 cost = st.session_state.dual_cost if flight_type=="Dual" else st.session_state.solo_cost
 
-st.sidebar.markdown("### Upload Flights CSV")
-csv_file = st.sidebar.file_uploader("Choose CSV", type=["csv"])
-
-if csv_file is not None:
-    df_csv = pd.read_csv(csv_file)
-
-    # Optional: preview first few rows
-    st.sidebar.write(df_csv.head())
-
-    if st.sidebar.button("Upload CSV"):
-        for _, row in df_csv.iterrows():
-            # Determine cost per hour based on flight type
-            cost = st.session_state.dual_cost if row["flight_type"] == "Dual" else st.session_state.solo_cost
-
-            # Insert flight into Supabase
-            supabase.table("flights").insert({
-                "user_id": user.id,
-                "date": str(row["date"]),
-                "flight_type": row["flight_type"],
-                "duration": float(row["duration"]),
-                "aircraft": row.get("aircraft", ""),
-                "instructor": row.get("instructor", ""),
-                "is_xc": bool(row.get("is_xc", False)),
-                "is_night": bool(row.get("is_night", False)),
-                "cost_per_hour": cost,
-                "track": row.get("track", track)  # fallback to current sidebar track
-            }).execute()
-        st.success("CSV uploaded successfully!")
-        st.rerun()
-
 if st.sidebar.button("Add Flight"):
     supabase.table("flights").insert({
         "user_id": user.id,
@@ -209,6 +162,32 @@ if st.sidebar.button("Add Flight"):
     st.rerun()
 
 # --------------------------------------------------
+# CSV UPLOAD
+# --------------------------------------------------
+st.sidebar.markdown("### Upload Flights CSV")
+csv_file = st.sidebar.file_uploader("Choose CSV", type=["csv"])
+if csv_file is not None:
+    df_csv = pd.read_csv(csv_file)
+    st.sidebar.write(df_csv.head())
+    if st.sidebar.button("Upload CSV"):
+        for _, row in df_csv.iterrows():
+            cost = st.session_state.dual_cost if row["flight_type"]=="Dual" else st.session_state.solo_cost
+            supabase.table("flights").insert({
+                "user_id": user.id,
+                "date": str(row["date"]),
+                "flight_type": row["flight_type"],
+                "duration": float(row["duration"]),
+                "aircraft": row.get("aircraft",""),
+                "instructor": row.get("instructor",""),
+                "is_xc": bool(row.get("is_xc", False)),
+                "is_night": bool(row.get("is_night", False)),
+                "cost_per_hour": cost,
+                "track": row.get("track", track)
+            }).execute()
+        st.success("CSV uploaded successfully!")
+        st.rerun()
+
+# --------------------------------------------------
 # HEADER
 # --------------------------------------------------
 st.markdown('<div class="main-title">✈️ ClimbPath</div>', unsafe_allow_html=True)
@@ -220,14 +199,14 @@ st.caption("Track training • Predict checkrides • Control costs")
 df = load_flights(track, user.id)
 totals, total_cost = calculate_totals(df)
 targets = TRACKS[track]
-avg_cost = total_cost/max(totals["Total"],1)
-remaining_cost = (targets["Total"]-totals["Total"])*avg_cost
+avg_cost = total_cost / max(totals["Total"], 1)
+remaining_cost = (targets["Total"] - totals["Total"]) * avg_cost
 checkride = estimate_checkride(totals, targets, hours_week)
 
 # --------------------------------------------------
 # METRICS
 # --------------------------------------------------
-c1,c2,c3,c4 = st.columns(4)
+c1, c2, c3, c4 = st.columns(4)
 c1.metric("Total Hours", round(totals["Total"],1))
 c2.metric("Est Checkride", checkride)
 c3.metric("Total Spent", f"${total_cost:,.0f}")
@@ -260,7 +239,7 @@ st.markdown('<div class="section-title">Cost Projection</div>', unsafe_allow_htm
 if totals["Total"] > 0:
     hours = list(range(int(totals["Total"]), targets["Total"]+1))
     costs = [h*avg_cost for h in hours]
-    chart_df = pd.DataFrame({"Hours": hours, "Cost": costs})
+    chart_df = pd.DataFrame({"Hours":hours, "Cost":costs})
     chart = alt.Chart(chart_df).mark_line().encode(x="Hours", y="Cost")
     st.altair_chart(chart, use_container_width=True)
 
@@ -287,7 +266,9 @@ if not df.empty:
 # --------------------------------------------------
 st.markdown('<div class="section-title">Flight Logbook</div>', unsafe_allow_html=True)
 gb = GridOptionsBuilder.from_dataframe(df)
-gb.configure_columns(["date","flight_type","duration","aircraft","instructor","is_xc","is_night","cost_per_hour"], editable=True)
+gb.configure_columns([
+    "date","flight_type","duration","aircraft","instructor","is_xc","is_night","cost_per_hour"
+], editable=True)
 gb.configure_selection("single")
 grid = AgGrid(df, gridOptions=gb.build(), update_mode=GridUpdateMode.MODEL_CHANGED, height=400)
 updated = pd.DataFrame(grid["data"])
