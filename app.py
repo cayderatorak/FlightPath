@@ -142,32 +142,33 @@ csv_file = st.sidebar.file_uploader("Choose CSV", type=["csv"])
 if csv_file is not None:
     df_csv = pd.read_csv(csv_file)
     
-    # Keep only the columns the app expects
-    df_csv = df_csv[["date","flight_type","duration","aircraft","instructor","is_xc","is_night","track"]]
+    # Keep only relevant columns that exist
+    expected_cols = ["date","flight_type","duration","aircraft","instructor","is_xc","is_night","track"]
+    df_csv = df_csv.reindex(columns=expected_cols)  # missing columns become NaN
     
-    st.sidebar.write(df_csv.head())  # preview first 5 rows
+    st.sidebar.write(df_csv.head())
     
     if st.sidebar.button("Upload CSV"):
         for _, row in df_csv.iterrows():
             cost = st.session_state.dual_cost if row["flight_type"]=="Dual" else st.session_state.solo_cost
             try:
                 supabase.table("flights").insert({
-                    "user_id": user.id,  # always current logged-in user
-                    "date": str(pd.to_datetime(row["date"]).date()),  # proper date
+                    "user_id": user.id,
+                    "date": str(pd.to_datetime(row["date"]).date()),
                     "flight_type": str(row["flight_type"]),
                     "duration": float(row["duration"]),
-                    "aircraft": str(row.get("aircraft","")),
-                    "instructor": str(row.get("instructor","")),
-                    "is_xc": bool(row.get("is_xc", False)),
-                    "is_night": bool(row.get("is_night", False)),
+                    "aircraft": str(row["aircraft"]) if pd.notna(row["aircraft"]) else "",
+                    "instructor": str(row["instructor"]) if pd.notna(row["instructor"]) else "",
+                    "is_xc": bool(row["is_xc"]) if pd.notna(row["is_xc"]) else False,
+                    "is_night": bool(row["is_night"]) if pd.notna(row["is_night"]) else False,
                     "cost_per_hour": float(cost),
-                    "track": str(row.get("track", track))  # default to current track
+                    "track": str(row["track"]) if pd.notna(row["track"]) else track
                 }).execute()
             except Exception as e:
                 st.error(f"Failed to insert row {row.to_dict()}: {e}")
         st.success("CSV uploaded successfully!")
         st.rerun()
-
+        
 # ------------------- HEADER -------------------
 st.markdown('<div class="main-title">✈️ ClimbPath</div>', unsafe_allow_html=True)
 st.caption("Track training • Predict checkrides • Control costs")
