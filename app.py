@@ -83,7 +83,6 @@ def estimate_remaining_cost(totals, targets, avg_cost_per_hour):
 # Streamlit UI
 # -----------------------
 st.set_page_config(layout="wide", page_title="FlightPath")
-
 st.title("FlightPath")
 
 # -----------------------
@@ -107,18 +106,24 @@ track_selected = st.sidebar.selectbox("Select Track", list(TRACKS.keys()))
 # Cost defaults per track (persistent with session_state)
 # -----------------------
 if 'dual_cost' not in st.session_state:
-    st.session_state['dual_cost'] = 180
+    st.session_state['dual_cost'] = 180.0
 if 'solo_cost' not in st.session_state:
-    st.session_state['solo_cost'] = 120
+    st.session_state['solo_cost'] = 120.0
 
 st.sidebar.header("Cost per Hour ($)")
-st.session_state['dual_cost'] = st.sidebar.number_input("Dual", value=st.session_state['dual_cost'], step=1.0)
-st.session_state['solo_cost'] = st.sidebar.number_input("Solo", value=st.session_state['solo_cost'], step=1.0)
+st.session_state['dual_cost'] = st.sidebar.number_input(
+    "Dual", value=st.session_state['dual_cost'], step=1.0, format="%.2f"
+)
+st.session_state['solo_cost'] = st.sidebar.number_input(
+    "Solo", value=st.session_state['solo_cost'], step=1.0, format="%.2f"
+)
 
 # -----------------------
 # Planned weekly hours
 # -----------------------
-planned_hours_per_week = st.sidebar.number_input("Planned Flight Hours / Week", min_value=0.0, step=1.0)
+planned_hours_per_week = st.sidebar.number_input(
+    "Planned Flight Hours / Week", min_value=0.0, step=1.0, format="%.1f"
+)
 
 # -----------------------
 # Add flight entry
@@ -126,14 +131,15 @@ planned_hours_per_week = st.sidebar.number_input("Planned Flight Hours / Week", 
 st.sidebar.header("Add Flight Entry")
 date = st.sidebar.date_input("Flight Date", datetime.today())
 flight_type = st.sidebar.selectbox("Flight Type", ["Dual","Solo"])
-duration = st.sidebar.number_input("Duration (hours)", min_value=0.0, step=0.1)
+duration = st.sidebar.number_input("Duration (hours)", min_value=0.0, step=0.1, format="%.1f")
 instructor = st.sidebar.text_input("Instructor (optional)")
 is_xc = st.sidebar.checkbox("XC Flight")
 is_night = st.sidebar.checkbox("Night Flight")
 
-cost_per_hour = st.session_state['dual_cost'] if flight_type=="Dual" else st.session_state['solo_cost']
-cost_per_hour += 20 if is_xc else 0
-cost_per_hour += 30 if is_night else 0
+# Calculate cost per hour dynamically
+cost_per_hour = float(st.session_state['dual_cost'] if flight_type=="Dual" else st.session_state['solo_cost'])
+cost_per_hour += 20.0 if is_xc else 0.0
+cost_per_hour += 30.0 if is_night else 0.0
 
 if st.sidebar.button("Add Flight"):
     supabase.table("flights").insert({
@@ -146,7 +152,7 @@ if st.sidebar.button("Add Flight"):
         "cost_per_hour": float(cost_per_hour),
         "track": track_selected
     }).execute()
-    st.sidebar.success(f"Flight Added! ${cost_per_hour}/hr")
+    st.sidebar.success(f"Flight Added! ${cost_per_hour:.2f}/hr")
 
 # -----------------------
 # Fetch flights and calculate
@@ -169,15 +175,33 @@ col3.metric("💰 Total Spent", f"${costs['Total']:.2f}")
 col4.metric("💰 Remaining Cost", f"${est_remaining_cost:.2f}")
 
 # -----------------------
-# Progress bars
+# Progress bars with colors
 # -----------------------
 st.subheader("Progress by Category")
 for cat in ["Dual","Solo","XC","Night"]:
     percent = (totals[cat]/TRACKS[track_selected][cat])*100
-    percent = min(percent,100)
+    percent = min(percent, 100)
+
+    # Determine color based on status
     bar_color = "green" if status[cat]=="🟢" else "yellow" if status[cat]=="🟡" else "red"
+
     st.markdown(f"**{cat}**: {totals[cat]:.1f}/{TRACKS[track_selected][cat]} hours")
-    st.progress(percent/100)
+    
+    # HTML for colored progress bar
+    st.markdown(f"""
+        <div style="background-color:#e0e0e0; border-radius:5px; width:100%; height:24px;">
+            <div style="
+                width:{percent}%;
+                background-color:{bar_color};
+                height:100%;
+                border-radius:5px;
+                text-align:right;
+                padding-right:5px;
+                color:black;
+                font-weight:bold;
+            ">{percent:.0f}%</div>
+        </div>
+        """, unsafe_allow_html=True)
 
 # -----------------------
 # Flight log table + CSV export
