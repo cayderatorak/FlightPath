@@ -138,24 +138,33 @@ if st.sidebar.button("Add Flight"):
 # ------------------- CSV UPLOAD -------------------
 st.sidebar.markdown("### Upload Flights CSV")
 csv_file = st.sidebar.file_uploader("Choose CSV", type=["csv"])
+
 if csv_file is not None:
     df_csv = pd.read_csv(csv_file)
-    st.sidebar.write(df_csv.head())
+    
+    # Keep only the columns the app expects
+    df_csv = df_csv[["date","flight_type","duration","aircraft","instructor","is_xc","is_night","track"]]
+    
+    st.sidebar.write(df_csv.head())  # preview first 5 rows
+    
     if st.sidebar.button("Upload CSV"):
         for _, row in df_csv.iterrows():
             cost = st.session_state.dual_cost if row["flight_type"]=="Dual" else st.session_state.solo_cost
-            supabase.table("flights").insert({
-                "user_id": user.id,
-                "date": str(row["date"]),
-                "flight_type": row["flight_type"],
-                "duration": float(row["duration"]),
-                "aircraft": row.get("aircraft",""),
-                "instructor": row.get("instructor",""),
-                "is_xc": bool(row.get("is_xc", False)),
-                "is_night": bool(row.get("is_night", False)),
-                "cost_per_hour": cost,
-                "track": row.get("track", track)
-            }).execute()
+            try:
+                supabase.table("flights").insert({
+                    "user_id": user.id,  # always current logged-in user
+                    "date": str(pd.to_datetime(row["date"]).date()),  # proper date
+                    "flight_type": str(row["flight_type"]),
+                    "duration": float(row["duration"]),
+                    "aircraft": str(row.get("aircraft","")),
+                    "instructor": str(row.get("instructor","")),
+                    "is_xc": bool(row.get("is_xc", False)),
+                    "is_night": bool(row.get("is_night", False)),
+                    "cost_per_hour": float(cost),
+                    "track": str(row.get("track", track))  # default to current track
+                }).execute()
+            except Exception as e:
+                st.error(f"Failed to insert row {row.to_dict()}: {e}")
         st.success("CSV uploaded successfully!")
         st.rerun()
 
