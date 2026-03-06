@@ -6,45 +6,11 @@ from supabase import create_client, Client
 from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
 
 # -----------------------
-# LOGIN SYSTEM (fixed for latest Streamlit)
+# Supabase setup
 # -----------------------
-def handle_login():
-    params = st.query_params  # <- use st.query_params, not experimental
-
-    # Handle redirect from magic link
-    if "access_token" in params:
-        access_token = params["access_token"][0]
-        refresh_token = params.get("refresh_token", [None])[0]
-        try:
-            supabase.auth.set_session(access_token, refresh_token)
-            st.experimental_set_query_params()  # clear URL params
-            st.experimental_rerun()             # rerun app
-        except Exception:
-            st.error("Login session error")
-            st.stop()
-
-    user_resp = supabase.auth.get_user()
-
-    if not user_resp or not user_resp.user:
-        st.title("✈️ FlightPath Login")
-        st.write("Sign in to access your flight tracker.")
-
-        email = st.text_input("Email")
-        if st.button("Send Magic Link"):
-            try:
-                supabase.auth.sign_in_with_otp({"email": email})
-                st.success("Magic link sent! Check your email.")
-            except Exception as e:
-                err_msg = str(e)
-                if "rate limit" in err_msg.lower():
-                    st.error("Too many requests. Wait a minute before retrying.")
-                else:
-                    st.error(f"Login error: {err_msg}")
-        st.stop()
-
-    return user_resp.user
-
-user = handle_login()
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_ANON_KEY = st.secrets["SUPABASE_ANON_KEY"]
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
 # -----------------------
 # Tracks and FAA targets
@@ -119,10 +85,55 @@ def estimate_remaining_cost(totals, targets, avg_cost_per_hour):
     return remaining_hours*avg_cost_per_hour
 
 # -----------------------
+# Authentication
+# -----------------------
+def handle_login():
+    # restore session if exists
+    if 'access_token' in st.session_state:
+        try:
+            user_resp = supabase.auth.get_user(st.session_state['access_token'])
+            if user_resp and user_resp.user:
+                return user_resp.user
+        except Exception:
+            st.warning("Session expired. Please login again.")
+            st.session_state.pop('access_token', None)
+            st.session_state.pop('refresh_token', None)
+
+    # handle magic link redirect
+    params = st.experimental_get_query_params()
+    if "access_token" in params:
+        st.session_state['access_token'] = params["access_token"][0]
+        st.session_state['refresh_token'] = params.get("refresh_token", [None])[0]
+        st.experimental_set_query_params()
+        st.experimental_rerun()
+
+    st.title("✈️ FlightPath Login")
+    email = st.text_input("Email")
+    if st.button("Send Magic Link"):
+        try:
+            supabase.auth.sign_in_with_otp({"email": email})
+            st.success("Magic link sent! Check your email.")
+        except Exception as e:
+            err_msg = str(e)
+            if "rate limit" in err_msg.lower():
+                st.error("Too many requests. Wait a minute before retrying.")
+            else:
+                st.error(f"Login error: {err_msg}")
+    st.stop()
+
+user = handle_login()
+
+# -----------------------
 # Streamlit setup
 # -----------------------
 st.set_page_config(layout="wide", page_title="FlightPath")
-st.title("FlightPath")
+
+st.sidebar.markdown(f"**Logged in as:** {user.email}")
+if st.sidebar.button("Logout"):
+    supabase.auth.sign_out()
+    st.session_state.pop('access_token', None)
+    st.session_state.pop('refresh_token', None)
+    st.experimental_rerun()
 
 # -----------------------
 # Session state defaults
@@ -132,21 +143,11 @@ if 'solo_cost' not in st.session_state: st.session_state['solo_cost'] = 120.0
 if 'edit_row' not in st.session_state: st.session_state['edit_row'] = None
 
 # -----------------------
-# Sidebar: user info
-# -----------------------
-st.sidebar.markdown(f"**Logged in as:** {user.email}")
-if st.sidebar.button("Logout"):
-    supabase.auth.sign_out()
-    st.experimental_rerun()
-
-# -----------------------
-# Sidebar: Track / Weekly Plan / Costs / Add Flight / CSV Upload
+# Sidebar: Track, weekly plan, costs, add flight
 # -----------------------
 with st.sidebar.expander("Track & Weekly Plan"):
     track_selected = st.selectbox("Select Track", list(TRACKS.keys()))
-    planned_hours_per_week = st.number_input(
-        "Planned Flight Hours / Week", min_value=0.0, step=1.0, format="%.1f"
-    )
+    planned_hours_per_week = st.number_input("Planned Flight Hours / Week", min_value=0.0, step=1.0, format="%.1f")
 
 with st.sidebar.expander("Flight Costs"):
     st.session_state['dual_cost'] = st.number_input("Dual", value=st.session_state['dual_cost'], step=1.0, format="%.2f")
@@ -159,9 +160,10 @@ with st.sidebar.expander("Add Flight"):
     instructor = st.text_input("Instructor (optional)")
     is_xc = st.checkbox("XC Flight")
     is_night = st.checkbox("Night Flight")
-    cost_per_hour = float(st.session_state['dual_cost'] if flight_type=="Dual" else st.session_state['solo_cost'])
-    cost_per_hour += 20.0 if is_xc else 0.0
-    cost_per_hour += 30.0 if is_night else 0.0
+
+    cost_per_hour = st.session_state['dual_cost'] if flight_type=="Dual" else st.session_state['solo_cost']
+    cost_per_hour += 20 if is_xc else 0
+    cost_per_hour += 30 if is_night else 0
 
     if st.button("Add Flight"):
         supabase.table("flights").insert({
@@ -178,6 +180,9 @@ with st.sidebar.expander("Add Flight"):
         st.success(f"Flight Added! ${cost_per_hour:.2f}/hr")
         st.experimental_rerun()
 
+# -----------------------
+# CSV Upload
+# -----------------------
 with st.sidebar.expander("CSV Upload"):
     uploaded_file = st.file_uploader("Upload CSV", type="csv")
     if uploaded_file:
@@ -198,7 +203,7 @@ with st.sidebar.expander("CSV Upload"):
         st.experimental_rerun()
 
 # -----------------------
-# Fetch Flights & Calculations
+# Fetch user flights & calculations
 # -----------------------
 df = get_user_flights(track_selected, user.id)
 totals, costs = calculate_totals(df)
@@ -218,13 +223,12 @@ col3.metric("💰 Total Spent", f"${costs['Total']:.2f}")
 col4.metric("💰 Remaining Cost", f"${est_remaining_cost:.2f}")
 
 # -----------------------
-# Progress Bars
+# Colored Progress Bars
 # -----------------------
 st.subheader("Progress by Category")
 for cat in ["Dual","Solo","XC","Night"]:
-    percent = (totals[cat]/TRACKS[track_selected][cat])*100
-    percent = min(percent, 100)
-    bar_color = "red" if percent <=33 else "yellow" if percent <=66 else "green"
+    percent = min((totals[cat]/TRACKS[track_selected][cat])*100, 100)
+    bar_color = "red" if percent<=33 else "yellow" if percent<=66 else "green"
     st.markdown(f"**{cat}**: {totals[cat]:.1f}/{TRACKS[track_selected][cat]} hours")
     st.markdown(f"""
         <div style="background-color:#e0e0e0; border-radius:5px; width:100%; height:24px;">
@@ -268,9 +272,9 @@ if not df.empty:
         edit_instructor = st.sidebar.text_input("Instructor", value=sel['instructor'])
         edit_is_xc = st.sidebar.checkbox("XC Flight", value=sel['is_xc'])
         edit_is_night = st.sidebar.checkbox("Night Flight", value=sel['is_night'])
-        edit_cost_per_hour = float(st.session_state['dual_cost'] if edit_type=="Dual" else st.session_state['solo_cost'])
-        edit_cost_per_hour += 20.0 if edit_is_xc else 0.0
-        edit_cost_per_hour += 30.0 if edit_is_night else 0.0
+        edit_cost_per_hour = st.session_state['dual_cost'] if edit_type=="Dual" else st.session_state['solo_cost']
+        edit_cost_per_hour += 20 if edit_is_xc else 0
+        edit_cost_per_hour += 30 if edit_is_night else 0
         if st.sidebar.button("Save Changes"):
             supabase.table("flights").update({
                 "date": edit_date.strftime("%Y-%m-%d"),
