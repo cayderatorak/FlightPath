@@ -70,10 +70,13 @@ def load_flights(track, user_id):
     df = pd.DataFrame(resp.data if resp.data else [])
     if df.empty:
         df = pd.DataFrame(columns=[
-            "id","date","flight_type","duration","aircraft","instructor","is_xc","is_night","cost_per_hour","track"
+            "id","date","flight_type","duration","aircraft","instructor",
+            "is_xc","is_night","cost_per_hour","track"
         ])
-    else:
-        df = df[(df["track"] == track) | (df["track"] == "Yes (optional)")]
+    # Include all user flights, but allow optional filtering
+    if not df.empty and track:
+        df["track"] = df["track"].fillna("Unknown")
+        df = df[df["track"] == track]
     return df
 
 # ------------------- CALCULATIONS -------------------
