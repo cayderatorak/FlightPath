@@ -17,16 +17,13 @@ if 'rerun_trigger' not in st.session_state:
     st.session_state['rerun_trigger'] = 0
 
 # Initialize cost values if not already in session_state
-if "cost_dual" not in st.session_state:
-    st.session_state["cost_dual"] = 180.0
-if "cost_solo" not in st.session_state:
-    st.session_state["cost_solo"] = 120.0
-if "xc_surcharge" not in st.session_state:
-    st.session_state["xc_surcharge"] = 20.0
-if "night_surcharge" not in st.session_state:
-    st.session_state["night_surcharge"] = 15.0
-if "planned_hours_per_week" not in st.session_state:
-    st.session_state["planned_hours_per_week"] = 5.0
+for key, default in {
+    "cost_dual": 180.0, "cost_solo": 120.0,
+    "xc_surcharge": 20.0, "night_surcharge": 15.0,
+    "planned_hours_per_week": 5.0, "proficiency_factor": 1.25
+}.items():
+    if key not in st.session_state:
+        st.session_state[key] = default
 
 # -------------------------
 # Supabase
@@ -44,6 +41,15 @@ FAA_SOLO = 10
 FAA_XC = 5
 FAA_NIGHT = 3
 
+# Apply proficiency factor
+targets = {
+    "Total": int(FAA_TOTAL * st.session_state["proficiency_factor"]),
+    "Dual": int(FAA_DUAL * st.session_state["proficiency_factor"]),
+    "Solo": int(FAA_SOLO * st.session_state["proficiency_factor"]),
+    "XC": int(FAA_XC * st.session_state["proficiency_factor"]),
+    "Night": int(FAA_NIGHT * st.session_state["proficiency_factor"])
+}
+
 # -------------------------
 # Sidebar: Navigation & Inputs
 # -------------------------
@@ -60,6 +66,12 @@ st.sidebar.number_input(
     min_value=0.0,
     step=1.0,
     key="planned_hours_per_week"
+)
+st.sidebar.number_input(
+    "Proficiency Factor (1.0=FAA min, 1.25=25% extra)",
+    min_value=1.0,
+    step=0.05,
+    key="proficiency_factor"
 )
 
 # -------------------------
@@ -86,19 +98,43 @@ if not df.empty:
 else:
     total_hours = dual_hours = solo_hours = xc_hours = night_hours = total_cost = 0
 
-remaining_hours = max(FAA_TOTAL - total_hours,0)
-est_checkride_date = "N/A"
-if st.session_state["planned_hours_per_week"] > 0:
-    est_checkride_date = (date.today() + timedelta(weeks=remaining_hours/st.session_state["planned_hours_per_week"])).strftime("%b %d, %Y")
+remaining_hours = max(targets["Total"] - total_hours, 0)
 avg_cost_per_hour = total_cost / max(total_hours,1)
 est_remaining_cost = remaining_hours * avg_cost_per_hour
+
+# -------------------------
+# Smarter Checkride Estimate
+# -------------------------
+def estimate_checkride_date_with_gaps(df, targets, weekly_hours):
+    if df.empty or weekly_hours <= 0:
+        return "Enter flight data / weekly hours"
+    total_completed = df['duration'].sum()
+    remaining_hours = max(targets["Total"] - total_completed, 0)
+    df_sorted = df.sort_values("date")
+    last_flight_date = pd.to_datetime(df_sorted['date'].iloc[-1])
+    days_since_last_flight = (pd.Timestamp.today() - last_flight_date).days
+    gap_multiplier = 1 + (days_since_last_flight / 14) * 0.05
+    adjusted_remaining = remaining_hours * gap_multiplier
+    est_weeks = adjusted_remaining / weekly_hours
+    est_date = pd.Timestamp.today() + pd.to_timedelta(est_weeks*7, unit='days')
+    return est_date.strftime("%b %d, %Y")
+
+# -------------------------
+# Projected Checkride Range
+# -------------------------
+def projected_checkride_range(df, targets, min_hours, max_hours):
+    min_date = estimate_checkride_date_with_gaps(df, targets, min_hours)
+    max_date = estimate_checkride_date_with_gaps(df, targets, max_hours)
+    return min_date, max_date
+
+est_checkride_date = estimate_checkride_date_with_gaps(df, targets, st.session_state["planned_hours_per_week"])
+proj_min, proj_max = projected_checkride_range(df, targets, st.session_state["planned_hours_per_week"], st.session_state["planned_hours_per_week"]*2)
 
 # -------------------------
 # Dashboard
 # -------------------------
 if page=="Dashboard":
     st.header("📊 Dashboard")
-    # Cards
     st.markdown(f"""
     <div style="display:flex; gap:20px; flex-wrap:wrap;">
         <div style="flex:1; background:#1f77b4; color:white; padding:20px; border-radius:10px; text-align:center;">
@@ -108,7 +144,8 @@ if page=="Dashboard":
             <h4>Total Cost</h4><h2>${int(total_cost)}</h2>
         </div>
         <div style="flex:1; background:#2ca02c; color:white; padding:20px; border-radius:10px; text-align:center;">
-            <h4>Estimated Checkride</h4><h2>{est_checkride_date}</h2>
+            <h4>Est. Checkride</h4><h2>{est_checkride_date}</h2>
+            <small>Range: {proj_min} - {proj_max}</small>
         </div>
         <div style="flex:1; background:#d62728; color:white; padding:20px; border-radius:10px; text-align:center;">
             <h4>Est. Remaining Cost</h4><h2>${int(est_remaining_cost)}</h2>
@@ -118,12 +155,12 @@ if page=="Dashboard":
 
     st.divider()
 
-    # FAA Progress with circular gauges
+    # FAA Progress
     st.subheader("FAA Requirement Progress")
     progress_data = {
         "Category":["Dual","Solo","XC","Night","Total"],
         "Completed":[dual_hours, solo_hours, xc_hours, night_hours, total_hours],
-        "Target":[FAA_DUAL, FAA_SOLO, FAA_XC, FAA_NIGHT, FAA_TOTAL]
+        "Target":[targets["Dual"], targets["Solo"], targets["XC"], targets["Night"], targets["Total"]]
     }
     progress_df = pd.DataFrame(progress_data)
     for idx,row in progress_df.iterrows():
@@ -141,7 +178,6 @@ if page=="Dashboard":
     if not df.empty:
         fig1 = px.pie(df, names="flight_type", values="duration", title="Flight Type Distribution")
         st.plotly_chart(fig1, use_container_width=True)
-
         df_sorted = df.sort_values("date")
         df_cum = df_sorted.groupby("date")["duration"].sum().cumsum().reset_index()
         fig2 = px.line(df_cum, x="date", y="duration", title="Cumulative Hours Over Time")
@@ -180,7 +216,7 @@ if page=="Log Flight":
             st.session_state['rerun_trigger'] += 1
 
 # -------------------------
-# Editable Flight Log
+# Flight Log
 # -------------------------
 if page=="Flight Log":
     st.header("📋 Flight Log")
