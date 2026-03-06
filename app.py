@@ -1,276 +1,209 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
-from supabase import create_client
-import plotly.express as px
+from datetime import datetime, timedelta
+from supabase import create_client, Client
+from supabase_auth.errors import AuthApiError
+import io
 
-# -------------------------
-# CONFIG
-# -------------------------
-
+# -----------------------
+# Supabase Setup
+# -----------------------
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+SUPABASE_ANON_KEY = st.secrets["SUPABASE_ANON_KEY"]
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+# -----------------------
+# Session State Setup
+# -----------------------
+if "login_message" not in st.session_state:
+    st.session_state["login_message"] = ""
+if "user_email" not in st.session_state:
+    st.session_state["user_email"] = ""
+if "cost_dual" not in st.session_state:
+    st.session_state["cost_dual"] = 180.0
+if "cost_solo" not in st.session_state:
+    st.session_state["cost_solo"] = 120.0
+if "rerun_trigger" not in st.session_state:
+    st.session_state["rerun_trigger"] = 0
 
-st.set_page_config(page_title="FlightPath", layout="wide")
-
-# -------------------------
-# DARK THEME
-# -------------------------
-
-st.markdown("""
-<style>
-
-.stApp {
-    background-color:#0f172a;
-    color:white;
-}
-
-.metric-card {
-    background-color:#1e293b;
-    padding:20px;
-    border-radius:10px;
-    text-align:center;
-}
-
-.card {
-    background-color:#1e293b;
-    padding:20px;
-    border-radius:10px;
-    margin-bottom:20px;
-}
-
-.progress-label {
-    font-size:14px;
-    margin-top:6px;
-}
-
-</style>
-""", unsafe_allow_html=True)
-
-# -------------------------
-# LOGIN
-# -------------------------
-
-if "user" not in st.session_state:
-    email = st.text_input("Email")
-
-    if st.button("Login"):
-        resp = supabase.auth.sign_in_with_otp({"email": email})
-        st.success("Check your email for login link")
-
+# -----------------------
+# Login Section
+# -----------------------
+if "user_session" not in st.session_state or st.session_state["user_session"] is None:
+    st.title("FlightPath Login")
+    email = st.text_input("Enter your email for a magic link", value=st.session_state["user_email"])
+    if st.button("Send Magic Link"):
+        st.session_state["user_email"] = email
+        try:
+            supabase.auth.sign_in_with_otp({"email": email})
+            st.session_state["login_message"] = f"✅ Magic link sent! Check {email} (including spam folder)."
+        except AuthApiError as e:
+            msg = str(e)
+            if "rate limit" in msg.lower():
+                st.session_state["login_message"] = "⚠️ Rate limit exceeded. Wait a few minutes."
+            else:
+                st.session_state["login_message"] = f"⚠️ Login error: {msg}"
+    if st.session_state["login_message"]:
+        st.info(st.session_state["login_message"])
     st.stop()
 
-# -------------------------
-# CAREER TRACK
-# -------------------------
+# -----------------------
+# Fetch Session After Login
+# -----------------------
+session_resp = supabase.auth.get_session()
+st.session_state["user_session"] = session_resp.data.get("session") if session_resp.data else None
+if not st.session_state["user_session"]:
+    st.warning("Please complete login via your magic link.")
+    st.stop()
 
-tracks = ["PPL", "Instrument", "Commercial", "ATP"]
+# -----------------------
+# Helper Functions
+# -----------------------
+def add_flight(date, flight_type, duration, instructor, is_xc, is_night, cost_per_hour):
+    supabase.table("flights").insert({
+        "date": date,
+        "flight_type": flight_type,
+        "duration": float(duration),
+        "instructor": instructor,
+        "is_xc": bool(is_xc),
+        "is_night": bool(is_night),
+        "cost_per_hour": float(cost_per_hour)
+    }).execute()
+    st.session_state["rerun_trigger"] += 1
 
-track_selected = st.selectbox("Training Track", tracks)
+def update_flight(flight_id, **kwargs):
+    supabase.table("flights").update(kwargs).eq("id", flight_id).execute()
+    st.session_state["rerun_trigger"] += 1
 
-# -------------------------
-# DATABASE FUNCTIONS
-# -------------------------
+def delete_flight(flight_id):
+    supabase.table("flights").delete().eq("id", flight_id).execute()
+    st.session_state["rerun_trigger"] += 1
 
-def get_flights(track):
+def get_flights():
+    resp = supabase.table("flights").select("*").order("date", desc=False).execute()
+    data = resp.data if resp.data else []
+    df = pd.DataFrame(data)
+    for col in ["id","date","flight_type","duration","instructor","is_xc","is_night","cost_per_hour"]:
+        if col not in df.columns:
+            df[col] = None if col in ["id","date","flight_type","instructor"] else 0
+    df["is_xc"] = df["is_xc"].fillna(False).astype(bool)
+    df["is_night"] = df["is_night"].fillna(False).astype(bool)
+    df["duration"] = df["duration"].fillna(0).astype(float)
+    df["cost_per_hour"] = df["cost_per_hour"].fillna(0).astype(float)
+    return df
 
-    resp = supabase.table("flights") \
-        .select("*") \
-        .eq("track", track) \
-        .order("date") \
-        .execute()
-
-    return pd.DataFrame(resp.data)
-
-
-df = get_flights(track_selected)
-
-# -------------------------
-# DASHBOARD METRICS
-# -------------------------
-
-total_hours = df["duration"].sum() if not df.empty else 0
-total_cost = df["cost"].sum() if not df.empty else 0
-
-remaining_hours = max(40 - total_hours, 0)
-remaining_cost = remaining_hours * 180
-
-checkride_date = "TBD"
-
-# -------------------------
-# METRIC CARDS
-# -------------------------
-
-col1,col2,col3,col4 = st.columns(4)
-
-with col1:
-    st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-    st.metric("Total Hours", round(total_hours,1))
-    st.markdown('</div>', unsafe_allow_html=True)
-
-with col2:
-    st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-    st.metric("Total Cost", f"${int(total_cost)}")
-    st.markdown('</div>', unsafe_allow_html=True)
-
-with col3:
-    st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-    st.metric("Est Checkride", checkride_date)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-with col4:
-    st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-    st.metric("Remaining Cost", f"${int(remaining_cost)}")
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# -------------------------
-# PROGRESS BAR FUNCTION
-# -------------------------
-
-def progress_bar(label,current,target,color):
-
-    pct = min(current/target,1)
-
-    colors = {
-        "green":"#22c55e",
-        "yellow":"#facc15",
-        "red":"#ef4444"
+def calculate_totals(df):
+    totals = {
+        "Dual": df[df['flight_type']=="Dual"]['duration'].sum(),
+        "Solo": df[df['flight_type']=="Solo"]['duration'].sum(),
+        "XC": df[df['is_xc']==True]['duration'].sum(),
+        "Night": df[df['is_night']==True]['duration'].sum(),
+        "Total": df['duration'].sum()
     }
+    costs = {
+        "Dual": (df[df['flight_type']=="Dual"]['duration']*df[df['flight_type']=="Dual"]['cost_per_hour']).sum(),
+        "Solo": (df[df['flight_type']=="Solo"]['duration']*df[df['flight_type']=="Solo"]['cost_per_hour']).sum(),
+        "XC": (df[df['is_xc']==True]['duration']*df[df['is_xc']==True]['cost_per_hour']).sum(),
+        "Night": (df[df['is_night']==True]['duration']*df[df['is_night']==True]['cost_per_hour']).sum(),
+        "Total": (df['duration']*df['cost_per_hour']).sum()
+    }
+    return totals, costs
 
-    bar_color = colors[color]
+def estimate_checkride_date(totals, planned_hours_per_week):
+    remaining = max(40 - totals.get("Total",0), 0)
+    if planned_hours_per_week <= 0:
+        return "Enter weekly hours to estimate"
+    est_date = datetime.today() + timedelta(weeks=remaining/planned_hours_per_week)
+    return est_date.strftime("%b %d, %Y")
 
-    st.markdown(f"""
-    <div style="background:#374151;border-radius:6px;height:20px;">
-        <div style="
-        width:{pct*100}%;
-        background:{bar_color};
-        height:20px;
-        border-radius:6px;">
-        </div>
-    </div>
+# -----------------------
+# Streamlit Layout
+# -----------------------
+st.set_page_config(layout="wide", page_title="FlightPath")
+st.title("FlightPath")
 
-    <div class="progress-label">
-    {label} — {current:.1f}/{target} hrs
-    </div>
-    """, unsafe_allow_html=True)
+# -----------------------
+# Sidebar: Settings & Add Flight
+# -----------------------
+st.sidebar.header("Flight Costs")
+st.session_state["cost_dual"] = st.sidebar.number_input("Dual $/hr", value=st.session_state["cost_dual"])
+st.session_state["cost_solo"] = st.sidebar.number_input("Solo $/hr", value=st.session_state["cost_solo"])
 
-# -------------------------
-# TRAINING PROGRESS
-# -------------------------
+st.sidebar.header("Add Flight Entry")
+date = st.sidebar.date_input("Date", datetime.today())
+flight_type = st.sidebar.selectbox("Type", ["Dual","Solo"])
+duration = st.sidebar.number_input("Duration (hours)", min_value=0.0, step=0.1)
+instructor = st.sidebar.text_input("Instructor (optional)")
+is_xc = st.sidebar.checkbox("XC Flight")
+is_night = st.sidebar.checkbox("Night Flight")
 
-st.markdown('<div class="card">', unsafe_allow_html=True)
-st.subheader("Training Progress")
+cost_per_hour = st.session_state["cost_dual"] if flight_type=="Dual" else st.session_state["cost_solo"]
+cost_per_hour += 20 if is_xc else 0
+cost_per_hour += 30 if is_night else 0
 
-solo = df[df["flight_type"]=="Solo"]["duration"].sum() if not df.empty else 0
-dual = df[df["flight_type"]=="Dual"]["duration"].sum() if not df.empty else 0
-xc = df[df["flight_type"].str.contains("XC",na=False)]["duration"].sum() if not df.empty else 0
-night = df[df["flight_type"].str.contains("Night",na=False)]["duration"].sum() if not df.empty else 0
+if st.sidebar.button("Add Flight"):
+    add_flight(date.strftime("%Y-%m-%d"), flight_type, duration, instructor, is_xc, is_night, cost_per_hour)
+    st.success(f"Flight added at ${cost_per_hour}/hr")
+    st.experimental_rerun()
 
-progress_bar("Dual",dual,20,"green")
-progress_bar("Solo",solo,10,"yellow")
-progress_bar("XC",xc,8,"green")
-progress_bar("Night",night,3,"yellow")
+# -----------------------
+# Main Dashboard
+# -----------------------
+df = get_flights()
+totals, costs = calculate_totals(df)
+planned_hours = st.sidebar.number_input("Planned Hours / Week", min_value=0.0, step=1.0)
+est_checkride = estimate_checkride_date(totals, planned_hours)
 
-st.markdown('</div>', unsafe_allow_html=True)
+st.subheader("🛫 Flight Progress")
+cols = st.columns(4)
+categories = ["Dual","Solo","XC","Night"]
+for i, cat in enumerate(categories):
+    percent = min(totals[cat]/(5 if cat=="XC" else 3 if cat=="Night" else 20),1.0)
+    color = "green" if percent>=1 else "yellow" if percent>=0.5 else "red"
+    cols[i].metric(f"{cat}", f"{totals[cat]:.1f} hrs", delta=f"{int(percent*100)}%")
+    cols[i].markdown(f"<div style='background-color:{color};height:10px;width:{percent*100}%;'></div>", unsafe_allow_html=True)
 
-# -------------------------
-# CHECKRIDE READINESS ENGINE
-# -------------------------
+st.subheader("💰 Cost & Checkride")
+st.write(f"Total Cost: ${costs['Total']:.2f}")
+st.write(f"Estimated Remaining Cost: ${max(0, (40-totals['Total'])*((costs['Total']/max(1,totals['Total'])) if totals['Total']>0 else st.session_state['cost_dual'])):.2f}")
+st.write(f"Estimated Checkride Date: {est_checkride}")
 
-st.markdown('<div class="card">', unsafe_allow_html=True)
-st.subheader("Checkride Readiness")
-
-def calculate_readiness(df):
-
-    total = df["duration"].sum() if not df.empty else 0
-    solo = df[df["flight_type"]=="Solo"]["duration"].sum() if not df.empty else 0
-    dual = df[df["flight_type"]=="Dual"]["duration"].sum() if not df.empty else 0
-    xc = df[df["flight_type"].str.contains("XC",na=False)]["duration"].sum() if not df.empty else 0
-    night = df[df["flight_type"].str.contains("Night",na=False)]["duration"].sum() if not df.empty else 0
-
-    score = 0
-    max_score = 5
-
-    if total >= 40: score+=1
-    if solo >= 10: score+=1
-    if dual >= 20: score+=1
-    if xc >= 8: score+=1
-    if night >= 3: score+=1
-
-    pct = int((score/max_score)*100)
-
-    return pct,total,solo,dual,xc,night
-
-
-readiness,total,solo,dual,xc,night = calculate_readiness(df)
-
-st.metric("Readiness Score",f"{readiness}%")
-
-missing=[]
-
-if total<40:
-    missing.append(f"{40-total:.1f} hrs total")
-
-if solo<10:
-    missing.append(f"{10-solo:.1f} hrs solo")
-
-if dual<20:
-    missing.append(f"{20-dual:.1f} hrs dual")
-
-if xc<8:
-    missing.append(f"{8-xc:.1f} hrs XC")
-
-if night<3:
-    missing.append(f"{3-night:.1f} hrs night")
-
-if missing:
-
-    st.write("Remaining Requirements:")
-
-    for m in missing:
-        st.write("•",m)
-
-else:
-    st.success("All FAA minimums met!")
-
-st.markdown('</div>', unsafe_allow_html=True)
-
-# -------------------------
-# TRAINING TIMELINE
-# -------------------------
-
-st.markdown('<div class="card">', unsafe_allow_html=True)
-
-st.subheader("Training Timeline")
-
+# -----------------------
+# Flight Log Table & Export
+# -----------------------
+st.subheader("✈️ Flight Log")
 if not df.empty:
-
-    timeline=df.sort_values("date",ascending=False).head(10)
-
-    for _,row in timeline.iterrows():
-
-        st.write(
-            f"**{row['date']}** — {row['flight_type']} • {row['duration']} hrs"
-        )
-
+    display_df = df.copy()
+    display_df = display_df.drop(columns=["id"])  # remove ID for clarity
+    st.dataframe(display_df)
+    
+    csv = display_df.to_csv(index=False).encode("utf-8")
+    st.download_button("Export CSV", data=csv, file_name="flight_log.csv", mime="text/csv")
+    
+    # Edit/Delete
+    st.sidebar.header("Edit/Delete Flight")
+    flight_options = [f"{row['date']} | {row['flight_type']} | {row['duration']}h | {row['instructor']}" for _, row in df.iterrows()]
+    selected = st.sidebar.selectbox("Select a flight to edit/delete", [""]+flight_options)
+    if selected:
+        idx = flight_options.index(selected)
+        row = df.iloc[idx]
+        new_date = st.sidebar.date_input("Date", datetime.strptime(row['date'],"%Y-%m-%d"))
+        new_type = st.sidebar.selectbox("Type", ["Dual","Solo"], index=["Dual","Solo"].index(row['flight_type']))
+        new_duration = st.sidebar.number_input("Duration", min_value=0.0, step=0.1, value=row['duration'])
+        new_instructor = st.sidebar.text_input("Instructor", value=row['instructor'])
+        new_is_xc = st.sidebar.checkbox("XC", value=row['is_xc'])
+        new_is_night = st.sidebar.checkbox("Night", value=row['is_night'])
+        
+        col1, col2 = st.sidebar.columns(2)
+        with col1:
+            if st.button("Update Flight"):
+                update_flight(row['id'], date=new_date.strftime("%Y-%m-%d"), flight_type=new_type, 
+                              duration=new_duration, instructor=new_instructor, is_xc=new_is_xc, is_night=new_is_night,
+                              cost_per_hour=new_duration*(st.session_state["cost_dual"] if new_type=="Dual" else st.session_state["cost_solo"]))
+                st.experimental_rerun()
+        with col2:
+            if st.button("Delete Flight"):
+                delete_flight(row['id'])
+                st.experimental_rerun()
 else:
-    st.write("No flights logged yet")
-
-st.markdown('</div>', unsafe_allow_html=True)
-
-# -------------------------
-# EXPORT FLIGHT LOG
-# -------------------------
-
-if not df.empty:
-
-    csv=df.to_csv(index=False)
-
-    st.download_button(
-        "Export Flight Log",
-        csv,
-        "flight_log.csv",
-        "text/csv"
-    )
+    st.write("No flights recorded yet.")
