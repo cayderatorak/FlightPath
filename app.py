@@ -11,10 +11,22 @@ st.set_page_config(page_title="FlightPath", page_icon="✈️", layout="wide")
 st.title("✈️ FlightPath")
 
 # -------------------------
-# Session state for rerun
+# Session state for rerun and cost persistence
 # -------------------------
 if 'rerun_trigger' not in st.session_state:
     st.session_state['rerun_trigger'] = 0
+
+# Initialize cost values if not already in session_state
+if "cost_dual" not in st.session_state:
+    st.session_state["cost_dual"] = 180.0
+if "cost_solo" not in st.session_state:
+    st.session_state["cost_solo"] = 120.0
+if "xc_surcharge" not in st.session_state:
+    st.session_state["xc_surcharge"] = 20.0
+if "night_surcharge" not in st.session_state:
+    st.session_state["night_surcharge"] = 15.0
+if "planned_hours_per_week" not in st.session_state:
+    st.session_state["planned_hours_per_week"] = 5.0
 
 # -------------------------
 # Supabase
@@ -39,13 +51,12 @@ st.sidebar.title("Navigation")
 page = st.sidebar.radio("Go to", ["Dashboard", "Log Flight", "Flight Log", "Reports"])
 
 st.sidebar.header("Default Cost per Hour ($/hr)")
-st.sidebar.number_input("Dual", value=180.0, step=1.0, key="cost_dual")
-st.sidebar.number_input("Solo", value=120.0, step=1.0, key="cost_solo")
-st.sidebar.number_input("XC Surcharge", value=20.0, step=1.0, key="xc_surcharge")
-st.sidebar.number_input("Night Surcharge", value=15.0, step=1.0, key="night_surcharge")
+st.sidebar.number_input("Dual", min_value=0.0, step=1.0, key="cost_dual")
+st.sidebar.number_input("Solo", min_value=0.0, step=1.0, key="cost_solo")
+st.sidebar.number_input("XC Surcharge", min_value=0.0, step=1.0, key="xc_surcharge")
+st.sidebar.number_input("Night Surcharge", min_value=0.0, step=1.0, key="night_surcharge")
 st.sidebar.number_input(
     "Planned Flight Hours / Week",
-    value=5.0,
     min_value=0.0,
     step=1.0,
     key="planned_hours_per_week"
@@ -87,7 +98,6 @@ est_remaining_cost = remaining_hours * avg_cost_per_hour
 # -------------------------
 if page=="Dashboard":
     st.header("📊 Dashboard")
-
     # Cards
     st.markdown(f"""
     <div style="display:flex; gap:20px; flex-wrap:wrap;">
