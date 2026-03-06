@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import plotly.graph_objects as go
 from datetime import date, timedelta
 from supabase import create_client
 
@@ -18,7 +17,13 @@ SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # -------------------------
-# FAA Requirements & Costs
+# Initialize session_state for rerun
+# -------------------------
+if 'rerun_trigger' not in st.session_state:
+    st.session_state['rerun_trigger'] = 0
+
+# -------------------------
+# FAA Requirements
 # -------------------------
 FAA_TOTAL = 40
 FAA_DUAL = 20
@@ -26,21 +31,22 @@ FAA_SOLO = 10
 FAA_XC = 5
 FAA_NIGHT = 3
 
-COST_DUAL = 180
-COST_SOLO = 120
-XC_SURCHARGE = 20
-NIGHT_SURCHARGE = 15
-
 # -------------------------
-# Sidebar
+# Sidebar: Cost Defaults & Navigation
 # -------------------------
 st.sidebar.title("Navigation")
 page = st.sidebar.radio("Go to", ["Dashboard", "Log Flight", "Flight Log", "Reports"])
 
+st.sidebar.header("Default Cost per Hour ($/hr)")
+cost_dual = st.sidebar.number_input("Dual", value=180.0, step=1.0)
+cost_solo = st.sidebar.number_input("Solo", value=120.0, step=1.0)
+xc_surcharge = st.sidebar.number_input("XC Surcharge", value=20.0, step=1.0)
+night_surcharge = st.sidebar.number_input("Night Surcharge", value=15.0, step=1.0)
+
 planned_hours_per_week = st.sidebar.number_input("Planned Flight Hours / Week", min_value=0.0, step=1.0)
 
 # -------------------------
-# Load flights
+# Load flights from Supabase
 # -------------------------
 def load_flights():
     resp = supabase.table("flights").select("*").execute()
@@ -64,7 +70,6 @@ else:
     total_hours = dual_hours = solo_hours = xc_hours = night_hours = total_cost = 0
 
 readiness = min(total_hours / FAA_TOTAL * 100, 100)
-
 remaining_hours = max(FAA_TOTAL - total_hours,0)
 est_checkride_date = "N/A"
 if planned_hours_per_week > 0:
@@ -80,7 +85,7 @@ if page=="Dashboard":
 
     # Cards
     st.markdown(f"""
-    <div style="display:flex; gap:20px;">
+    <div style="display:flex; gap:20px; flex-wrap:wrap;">
         <div style="flex:1; background:#111; color:white; padding:20px; border-radius:10px; text-align:center;">
             <h3>Total Hours</h3><h2>{round(total_hours,1)} hrs</h2>
         </div>
@@ -100,33 +105,8 @@ if page=="Dashboard":
     """, unsafe_allow_html=True)
 
     st.divider()
-    
-    # Gauge
-    st.subheader("FAA Readiness Gauge")
-    gauge = go.Figure(go.Indicator(
-        mode="gauge+number",
-        value=readiness,
-        title={"text":"FAA Progress"},
-        gauge={
-            "axis":{"range":[0,100]},
-            "bar":{"color":"green"},
-            "steps":[{"range":[0,40],"color":"red"},
-                     {"range":[40,70],"color":"orange"},
-                     {"range":[70,100],"color":"green"}]
-        }
-    ))
-    st.plotly_chart(gauge, use_container_width=True)
 
-    # Training distribution
-    st.subheader("Training Distribution")
-    chart_data = pd.DataFrame({
-        "Type":["Dual","Solo","Cross Country","Night"],
-        "Hours":[dual_hours, solo_hours, xc_hours, night_hours]
-    })
-    fig2 = go.Figure(go.Bar(x=chart_data["Type"], y=chart_data["Hours"], marker_color=["blue","green","orange","purple"]))
-    st.plotly_chart(fig2, use_container_width=True)
-
-    # FAA Progress bars
+    # FAA Progress
     st.subheader("FAA Requirement Progress")
     def color_progress(value,max_value):
         percent=value/max_value
@@ -159,9 +139,9 @@ if page=="Log Flight":
             is_night = st.checkbox("Night")
         submitted = st.form_submit_button("Add Flight")
         if submitted:
-            base_cost = COST_DUAL if flight_type=="Dual" else COST_SOLO
-            if is_xc: base_cost += XC_SURCHARGE
-            if is_night: base_cost += NIGHT_SURCHARGE
+            base_cost = cost_dual if flight_type=="Dual" else cost_solo
+            if is_xc: base_cost += xc_surcharge
+            if is_night: base_cost += night_surcharge
             supabase.table("flights").insert({
                 "date":str(flight_date),
                 "flight_type":flight_type,
@@ -171,8 +151,8 @@ if page=="Log Flight":
                 "is_night":is_night,
                 "cost_per_hour":base_cost
             }).execute()
-            st.success("Flight logged!")
-            st.experimental_rerun()
+            st.success(f"Flight logged! ${base_cost}/hr")
+            st.session_state['rerun_trigger'] += 1  # trigger rerun
 
 # -------------------------
 # Editable Flight Log
@@ -197,11 +177,11 @@ if page=="Flight Log":
                         "is_night":new_night
                     }).eq("id", row["id"]).execute()
                     st.success("Flight updated")
-                    st.session_state['rerun_trigger'] = not st.session_state.get('rerun_trigger', False)
+                    st.session_state['rerun_trigger'] += 1
                 if col2.button("Delete", key=f"delete{idx}"):
                     supabase.table("flights").delete().eq("id", row["id"]).execute()
                     st.warning("Flight deleted")
-                    st.experimental_rerun()
+                    st.session_state['rerun_trigger'] += 1
     else:
         st.info("No flights logged yet.")
 
