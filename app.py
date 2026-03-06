@@ -11,17 +11,24 @@ st.set_page_config(page_title="FlightPath", page_icon="✈️", layout="wide")
 st.title("✈️ FlightPath")
 
 # -------------------------
+# Session state for rerun and sidebar persistence
+# -------------------------
+if 'rerun_trigger' not in st.session_state:
+    st.session_state['rerun_trigger'] = 0
+
+# Persist sidebar cost and weekly hours
+if "cost_dual" not in st.session_state: st.session_state["cost_dual"] = 180.0
+if "cost_solo" not in st.session_state: st.session_state["cost_solo"] = 120.0
+if "xc_surcharge" not in st.session_state: st.session_state["xc_surcharge"] = 20.0
+if "night_surcharge" not in st.session_state: st.session_state["night_surcharge"] = 15.0
+if "planned_hours_per_week" not in st.session_state: st.session_state["planned_hours_per_week"] = 5.0
+
+# -------------------------
 # Supabase
 # -------------------------
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-# -------------------------
-# Session state for rerun
-# -------------------------
-if 'rerun_trigger' not in st.session_state:
-    st.session_state['rerun_trigger'] = 0
 
 # -------------------------
 # FAA minimums
@@ -39,12 +46,11 @@ st.sidebar.title("Navigation")
 page = st.sidebar.radio("Go to", ["Dashboard", "Log Flight", "Flight Log", "Reports"])
 
 st.sidebar.header("Default Cost per Hour ($/hr)")
-cost_dual = st.sidebar.number_input("Dual", value=180.0, step=1.0)
-cost_solo = st.sidebar.number_input("Solo", value=120.0, step=1.0)
-xc_surcharge = st.sidebar.number_input("XC Surcharge", value=20.0, step=1.0)
-night_surcharge = st.sidebar.number_input("Night Surcharge", value=15.0, step=1.0)
-
-planned_hours_per_week = st.sidebar.number_input("Planned Flight Hours / Week", min_value=0.0, step=1.0)
+st.session_state["cost_dual"] = st.sidebar.number_input("Dual", value=st.session_state["cost_dual"], step=1.0)
+st.session_state["cost_solo"] = st.sidebar.number_input("Solo", value=st.session_state["cost_solo"], step=1.0)
+st.session_state["xc_surcharge"] = st.sidebar.number_input("XC Surcharge", value=st.session_state["xc_surcharge"], step=1.0)
+st.session_state["night_surcharge"] = st.sidebar.number_input("Night", value=st.session_state["night_surcharge"], step=1.0)
+st.session_state["planned_hours_per_week"] = st.sidebar.number_input("Planned Flight Hours / Week", value=st.session_state["planned_hours_per_week"], min_value=0.0, step=1.0)
 
 # -------------------------
 # Load flights
@@ -73,8 +79,8 @@ else:
 readiness = min(total_hours / FAA_TOTAL * 100, 100)
 remaining_hours = max(FAA_TOTAL - total_hours,0)
 est_checkride_date = "N/A"
-if planned_hours_per_week > 0:
-    est_checkride_date = (date.today() + timedelta(weeks=remaining_hours/planned_hours_per_week)).strftime("%b %d, %Y")
+if st.session_state["planned_hours_per_week"] > 0:
+    est_checkride_date = (date.today() + timedelta(weeks=remaining_hours/st.session_state["planned_hours_per_week"])).strftime("%b %d, %Y")
 avg_cost_per_hour = total_cost / max(total_hours,1)
 est_remaining_cost = remaining_hours * avg_cost_per_hour
 
@@ -153,9 +159,9 @@ if page=="Log Flight":
             is_night = st.checkbox("Night")
         submitted = st.form_submit_button("Add Flight")
         if submitted:
-            base_cost = cost_dual if flight_type=="Dual" else cost_solo
-            if is_xc: base_cost += xc_surcharge
-            if is_night: base_cost += night_surcharge
+            base_cost = st.session_state["cost_dual"] if flight_type=="Dual" else st.session_state["cost_solo"]
+            if is_xc: base_cost += st.session_state["xc_surcharge"]
+            if is_night: base_cost += st.session_state["night_surcharge"]
             supabase.table("flights").insert({
                 "date":str(flight_date),
                 "flight_type":flight_type,
