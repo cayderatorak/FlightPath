@@ -85,40 +85,53 @@ def estimate_remaining_cost(totals, targets, avg_cost_per_hour):
     return remaining_hours*avg_cost_per_hour
 
 # -----------------------
-# Authentication
+# Persistent login with "Remember Me"
 # -----------------------
 def handle_login():
-    # restore session if exists
-    if 'access_token' in st.session_state:
-        try:
-            user_resp = supabase.auth.get_user(st.session_state['access_token'])
-            if user_resp and user_resp.user:
-                return user_resp.user
-        except Exception:
-            st.warning("Session expired. Please login again.")
-            st.session_state.pop('access_token', None)
-            st.session_state.pop('refresh_token', None)
+    # Check if user already in session
+    if st.session_state.get("user"):
+        return st.session_state["user"]
 
-    # handle magic link redirect
+    # Try restore session from query params
     params = st.experimental_get_query_params()
     if "access_token" in params:
-        st.session_state['access_token'] = params["access_token"][0]
-        st.session_state['refresh_token'] = params.get("refresh_token", [None])[0]
-        st.experimental_set_query_params()
-        st.experimental_rerun()
-
-    st.title("✈️ FlightPath Login")
-    email = st.text_input("Email")
-    if st.button("Send Magic Link"):
         try:
-            supabase.auth.sign_in_with_otp({"email": email})
-            st.success("Magic link sent! Check your email.")
-        except Exception as e:
-            err_msg = str(e)
-            if "rate limit" in err_msg.lower():
-                st.error("Too many requests. Wait a minute before retrying.")
-            else:
-                st.error(f"Login error: {err_msg}")
+            supabase.auth.set_session(params["access_token"][0], params.get("refresh_token", [None])[0])
+            st.experimental_set_query_params()
+            st.experimental_rerun()
+        except Exception:
+            st.error("Session restore failed.")
+            st.stop()
+
+    # Login / Signup form
+    st.title("✈️ FlightPath Login / Signup")
+    email = st.text_input("Email")
+    password = st.text_input("Password", type="password")
+    remember_me = st.checkbox("Remember Me", value=st.session_state.get("remember_me", False))
+    st.session_state["remember_me"] = remember_me
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Login"):
+            try:
+                resp = supabase.auth.sign_in_with_password({"email": email, "password": password})
+                if resp.user:
+                    st.session_state["user"] = resp.user
+                    if remember_me:
+                        st.experimental_set_query_params(
+                            access_token=resp.session.access_token,
+                            refresh_token=resp.session.refresh_token
+                        )
+                    st.experimental_rerun()
+            except Exception as e:
+                st.error(f"Login failed: {e}")
+    with col2:
+        if st.button("Signup"):
+            try:
+                resp = supabase.auth.sign_up({"email": email, "password": password})
+                st.success("Account created! Please login.")
+            except Exception as e:
+                st.error(f"Signup failed: {e}")
     st.stop()
 
 user = handle_login()
@@ -127,13 +140,7 @@ user = handle_login()
 # Streamlit setup
 # -----------------------
 st.set_page_config(layout="wide", page_title="FlightPath")
-
-st.sidebar.markdown(f"**Logged in as:** {user.email}")
-if st.sidebar.button("Logout"):
-    supabase.auth.sign_out()
-    st.session_state.pop('access_token', None)
-    st.session_state.pop('refresh_token', None)
-    st.experimental_rerun()
+st.title("FlightPath")
 
 # -----------------------
 # Session state defaults
@@ -143,7 +150,17 @@ if 'solo_cost' not in st.session_state: st.session_state['solo_cost'] = 120.0
 if 'edit_row' not in st.session_state: st.session_state['edit_row'] = None
 
 # -----------------------
-# Sidebar: Track, weekly plan, costs, add flight
+# Sidebar user info & logout
+# -----------------------
+st.sidebar.markdown(f"**Logged in as:** {user.email}")
+if st.sidebar.button("Logout"):
+    supabase.auth.sign_out()
+    st.experimental_set_query_params()  # remove tokens
+    st.session_state.pop("user", None)
+    st.experimental_rerun()
+
+# -----------------------
+# Sidebar: Track / Weekly Plan / Costs / Add Flight / CSV Upload
 # -----------------------
 with st.sidebar.expander("Track & Weekly Plan"):
     track_selected = st.selectbox("Select Track", list(TRACKS.keys()))
@@ -160,8 +177,7 @@ with st.sidebar.expander("Add Flight"):
     instructor = st.text_input("Instructor (optional)")
     is_xc = st.checkbox("XC Flight")
     is_night = st.checkbox("Night Flight")
-
-    cost_per_hour = st.session_state['dual_cost'] if flight_type=="Dual" else st.session_state['solo_cost']
+    cost_per_hour = float(st.session_state['dual_cost'] if flight_type=="Dual" else st.session_state['solo_cost'])
     cost_per_hour += 20 if is_xc else 0
     cost_per_hour += 30 if is_night else 0
 
@@ -180,9 +196,6 @@ with st.sidebar.expander("Add Flight"):
         st.success(f"Flight Added! ${cost_per_hour:.2f}/hr")
         st.experimental_rerun()
 
-# -----------------------
-# CSV Upload
-# -----------------------
 with st.sidebar.expander("CSV Upload"):
     uploaded_file = st.file_uploader("Upload CSV", type="csv")
     if uploaded_file:
@@ -203,7 +216,7 @@ with st.sidebar.expander("CSV Upload"):
         st.experimental_rerun()
 
 # -----------------------
-# Fetch user flights & calculations
+# Fetch Flights & Calculations
 # -----------------------
 df = get_user_flights(track_selected, user.id)
 totals, costs = calculate_totals(df)
@@ -231,7 +244,7 @@ for cat in ["Dual","Solo","XC","Night"]:
     bar_color = "red" if percent<=33 else "yellow" if percent<=66 else "green"
     st.markdown(f"**{cat}**: {totals[cat]:.1f}/{TRACKS[track_selected][cat]} hours")
     st.markdown(f"""
-        <div style="background-color:#e0e0e0; border-radius:5px; width:100%; height:24px;">
+        <div style="background-color:#e0e0e0;border-radius:5px;width:100%;height:24px;">
             <div style="
                 width:{percent}%;
                 background-color:{bar_color};
@@ -261,33 +274,6 @@ if not df.empty:
         height=300,
         fit_columns_on_grid_load=True
     )
-
-    selected = grid_response['selected_rows']
-    if selected:
-        sel = selected[0]
-        st.sidebar.header("Edit Selected Flight")
-        edit_date = st.sidebar.date_input("Flight Date", pd.to_datetime(sel['date']))
-        edit_type = st.sidebar.selectbox("Flight Type", ["Dual","Solo"], index=0 if sel['flight_type']=="Dual" else 1)
-        edit_duration = st.sidebar.number_input("Duration (hours)", value=float(sel['duration']), step=0.1, format="%.1f")
-        edit_instructor = st.sidebar.text_input("Instructor", value=sel['instructor'])
-        edit_is_xc = st.sidebar.checkbox("XC Flight", value=sel['is_xc'])
-        edit_is_night = st.sidebar.checkbox("Night Flight", value=sel['is_night'])
-        edit_cost_per_hour = st.session_state['dual_cost'] if edit_type=="Dual" else st.session_state['solo_cost']
-        edit_cost_per_hour += 20 if edit_is_xc else 0
-        edit_cost_per_hour += 30 if edit_is_night else 0
-        if st.sidebar.button("Save Changes"):
-            supabase.table("flights").update({
-                "date": edit_date.strftime("%Y-%m-%d"),
-                "flight_type": edit_type,
-                "duration": float(edit_duration),
-                "instructor": edit_instructor,
-                "is_xc": bool(edit_is_xc),
-                "is_night": bool(edit_is_night),
-                "cost_per_hour": float(edit_cost_per_hour)
-            }).eq("date", sel['date']).eq("flight_type", sel['flight_type']).eq("track", track_selected).eq("user_id", user.id).execute()
-            st.sidebar.success("Flight updated!")
-            st.experimental_rerun()
-
     csv = df.to_csv(index=False).encode('utf-8')
     st.download_button("Download Flight Log CSV", data=csv, file_name=f"{track_selected}_flights.csv", mime="text/csv")
 else:
