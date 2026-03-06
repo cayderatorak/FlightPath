@@ -25,8 +25,9 @@ TRACKS = {
 # -----------------------
 # Helper functions
 # -----------------------
-def get_flights(track):
-    resp = supabase.table("flights").select("*").eq("track", track).order("date", desc=False).execute()
+def get_user_flights(track, user_id):
+    resp = supabase.table("flights").select("*")\
+        .eq("track", track).eq("user_id", user_id).order("date", desc=False).execute()
     data = resp.data if resp.data else []
     df = pd.DataFrame(data)
     if df.empty:
@@ -60,12 +61,12 @@ def calculate_remaining(totals, targets):
     status = {}
     for cat in targets:
         remaining[cat] = max(targets[cat]-totals.get(cat,0),0)
-        if totals.get(cat,0)>=targets[cat]:
-            status[cat]="🟢"
-        elif totals.get(cat,0)>=targets[cat]*0.5:
-            status[cat]="🟡"
+        if totals.get(cat,0) >= targets[cat]:
+            status[cat] = "🟢"
+        elif totals.get(cat,0) >= targets[cat]*0.5:
+            status[cat] = "🟡"
         else:
-            status[cat]="🔴"
+            status[cat] = "🔴"
     return remaining, status
 
 def estimate_checkride_date(totals, targets, planned_hours_per_week):
@@ -80,7 +81,7 @@ def estimate_remaining_cost(totals, targets, avg_cost_per_hour):
     return remaining_hours*avg_cost_per_hour
 
 # -----------------------
-# Streamlit UI
+# Streamlit setup
 # -----------------------
 st.set_page_config(layout="wide", page_title="FlightPath")
 st.title("FlightPath")
@@ -93,9 +94,12 @@ if 'solo_cost' not in st.session_state: st.session_state['solo_cost'] = 120.0
 if 'edit_row' not in st.session_state: st.session_state['edit_row'] = None
 
 # -----------------------
-# Sidebar: Login & Settings
+# Authentication: must be logged in
 # -----------------------
-with st.sidebar.expander("Login / Account"):
+user_resp = supabase.auth.get_user()
+if not user_resp or not user_resp.user:
+    st.title("🚫 Login Required")
+    st.write("You must sign in to use this app.")
     email = st.text_input("Email")
     if st.button("Send Magic Link"):
         try:
@@ -107,7 +111,20 @@ with st.sidebar.expander("Login / Account"):
                 st.error("Too many requests. Wait a minute before retrying.")
             else:
                 st.error(f"Error sending link: {err_msg}")
+    st.stop()
+user = user_resp.user
 
+# -----------------------
+# Sidebar: user info & logout
+# -----------------------
+st.sidebar.markdown(f"**Logged in as:** {user.email}")
+if st.sidebar.button("Logout"):
+    supabase.auth.sign_out()
+    st.experimental_rerun()
+
+# -----------------------
+# Sidebar: Track, Costs, Weekly Plan, Add Flight
+# -----------------------
 with st.sidebar.expander("Track & Weekly Plan"):
     track_selected = st.selectbox("Select Track", list(TRACKS.keys()))
     planned_hours_per_week = st.number_input(
@@ -139,7 +156,8 @@ with st.sidebar.expander("Add Flight"):
             "is_xc": bool(is_xc),
             "is_night": bool(is_night),
             "cost_per_hour": float(cost_per_hour),
-            "track": track_selected
+            "track": track_selected,
+            "user_id": user.id
         }).execute()
         st.success(f"Flight Added! ${cost_per_hour:.2f}/hr")
         st.experimental_rerun()
@@ -157,15 +175,16 @@ with st.sidebar.expander("CSV Upload"):
                 "is_xc": bool(row['is_xc']),
                 "is_night": bool(row['is_night']),
                 "cost_per_hour": float(row['cost_per_hour']),
-                "track": row['track']
+                "track": row['track'],
+                "user_id": user.id
             }).execute()
         st.success("All flights re-uploaded successfully!")
         st.experimental_rerun()
 
 # -----------------------
-# Fetch flights & calculations
+# Fetch user flights & calculations
 # -----------------------
-df = get_flights(track_selected)
+df = get_user_flights(track_selected, user.id)
 totals, costs = calculate_totals(df)
 remaining, status = calculate_remaining(totals, TRACKS[track_selected])
 avg_cost_per_hour = costs["Total"]/max(totals["Total"],1)
@@ -183,12 +202,21 @@ col3.metric("💰 Total Spent", f"${costs['Total']:.2f}")
 col4.metric("💰 Remaining Cost", f"${est_remaining_cost:.2f}")
 
 # -----------------------
-# Colored Progress Bars
+# Colored Progress Bars by Percentage
 # -----------------------
 st.subheader("Progress by Category")
 for cat in ["Dual","Solo","XC","Night"]:
-    percent = min((totals[cat]/TRACKS[track_selected][cat])*100, 100)
-    bar_color = "green" if status[cat]=="🟢" else "yellow" if status[cat]=="🟡" else "red"
+    percent = (totals[cat]/TRACKS[track_selected][cat])*100
+    percent = min(percent, 100)
+
+    # Strict percentage-based color
+    if percent <= 33:
+        bar_color = "red"
+    elif percent <= 66:
+        bar_color = "yellow"
+    else:
+        bar_color = "green"
+
     st.markdown(f"**{cat}**: {totals[cat]:.1f}/{TRACKS[track_selected][cat]} hours")
     st.markdown(f"""
         <div style="background-color:#e0e0e0; border-radius:5px; width:100%; height:24px;">
@@ -245,7 +273,7 @@ if not df.empty:
                 "is_xc": bool(edit_is_xc),
                 "is_night": bool(edit_is_night),
                 "cost_per_hour": float(edit_cost_per_hour)
-            }).eq("date", sel['date']).eq("flight_type", sel['flight_type']).eq("track", track_selected).execute()
+            }).eq("date", sel['date']).eq("flight_type", sel['flight_type']).eq("track", track_selected).eq("user_id", user.id).execute()
             st.sidebar.success("Flight updated!")
             st.experimental_rerun()
 
