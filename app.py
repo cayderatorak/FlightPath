@@ -191,10 +191,10 @@ if page=="Flight Log":
                 col1,col2 = st.columns(2)
                 if col1.button("Update", key=f"update{idx}"):
                     supabase.table("flights").update({
-                    "duration":new_duration,
-                    "flight_type":new_type,
-                    "is_xc":new_xc,
-                    "is_night":new_night
+                        "duration":new_duration,
+                        "flight_type":new_type,
+                        "is_xc":new_xc,
+                        "is_night":new_night
                     }).eq("id", row["id"]).execute()
                     st.success("Flight updated")
                     st.session_state['rerun_trigger'] = not st.session_state.get('rerun_trigger', False)
