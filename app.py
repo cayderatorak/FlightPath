@@ -11,17 +11,10 @@ st.set_page_config(page_title="FlightPath", page_icon="✈️", layout="wide")
 st.title("✈️ FlightPath")
 
 # -------------------------
-# Session state for rerun and sidebar persistence
+# Session state for rerun
 # -------------------------
 if 'rerun_trigger' not in st.session_state:
     st.session_state['rerun_trigger'] = 0
-
-# Persist sidebar cost and weekly hours
-if "cost_dual" not in st.session_state: st.session_state["cost_dual"] = 180.0
-if "cost_solo" not in st.session_state: st.session_state["cost_solo"] = 120.0
-if "xc_surcharge" not in st.session_state: st.session_state["xc_surcharge"] = 20.0
-if "night_surcharge" not in st.session_state: st.session_state["night_surcharge"] = 15.0
-if "planned_hours_per_week" not in st.session_state: st.session_state["planned_hours_per_week"] = 5.0
 
 # -------------------------
 # Supabase
@@ -46,11 +39,17 @@ st.sidebar.title("Navigation")
 page = st.sidebar.radio("Go to", ["Dashboard", "Log Flight", "Flight Log", "Reports"])
 
 st.sidebar.header("Default Cost per Hour ($/hr)")
-st.session_state["cost_dual"] = st.sidebar.number_input("Dual", value=st.session_state["cost_dual"], step=1.0)
-st.session_state["cost_solo"] = st.sidebar.number_input("Solo", value=st.session_state["cost_solo"], step=1.0)
-st.session_state["xc_surcharge"] = st.sidebar.number_input("XC Surcharge", value=st.session_state["xc_surcharge"], step=1.0)
-st.session_state["night_surcharge"] = st.sidebar.number_input("Night", value=st.session_state["night_surcharge"], step=1.0)
-st.session_state["planned_hours_per_week"] = st.sidebar.number_input("Planned Flight Hours / Week", value=st.session_state["planned_hours_per_week"], min_value=0.0, step=1.0)
+st.sidebar.number_input("Dual", value=180.0, step=1.0, key="cost_dual")
+st.sidebar.number_input("Solo", value=120.0, step=1.0, key="cost_solo")
+st.sidebar.number_input("XC Surcharge", value=20.0, step=1.0, key="xc_surcharge")
+st.sidebar.number_input("Night Surcharge", value=15.0, step=1.0, key="night_surcharge")
+st.sidebar.number_input(
+    "Planned Flight Hours / Week",
+    value=5.0,
+    min_value=0.0,
+    step=1.0,
+    key="planned_hours_per_week"
+)
 
 # -------------------------
 # Load flights
@@ -76,7 +75,6 @@ if not df.empty:
 else:
     total_hours = dual_hours = solo_hours = xc_hours = night_hours = total_cost = 0
 
-readiness = min(total_hours / FAA_TOTAL * 100, 100)
 remaining_hours = max(FAA_TOTAL - total_hours,0)
 est_checkride_date = "N/A"
 if st.session_state["planned_hours_per_week"] > 0:
@@ -88,55 +86,52 @@ est_remaining_cost = remaining_hours * avg_cost_per_hour
 # Dashboard
 # -------------------------
 if page=="Dashboard":
-    st.header("Dashboard")
+    st.header("📊 Dashboard")
 
     # Cards
     st.markdown(f"""
     <div style="display:flex; gap:20px; flex-wrap:wrap;">
-        <div style="flex:1; background:#111; color:white; padding:20px; border-radius:10px; text-align:center;">
-            <h3>Total Hours</h3><h2>{round(total_hours,1)} hrs</h2>
+        <div style="flex:1; background:#1f77b4; color:white; padding:20px; border-radius:10px; text-align:center;">
+            <h4>Total Hours</h4><h2>{round(total_hours,1)} hrs</h2>
         </div>
-        <div style="flex:1; background:#111; color:white; padding:20px; border-radius:10px; text-align:center;">
-            <h3>Readiness</h3><h2>{int(readiness)}%</h2>
+        <div style="flex:1; background:#ff7f0e; color:white; padding:20px; border-radius:10px; text-align:center;">
+            <h4>Total Cost</h4><h2>${int(total_cost)}</h2>
         </div>
-        <div style="flex:1; background:#111; color:white; padding:20px; border-radius:10px; text-align:center;">
-            <h3>Total Cost</h3><h2>${int(total_cost)}</h2>
+        <div style="flex:1; background:#2ca02c; color:white; padding:20px; border-radius:10px; text-align:center;">
+            <h4>Estimated Checkride</h4><h2>{est_checkride_date}</h2>
         </div>
-        <div style="flex:1; background:#111; color:white; padding:20px; border-radius:10px; text-align:center;">
-            <h3>Est. Checkride</h3><h2>{est_checkride_date}</h2>
-        </div>
-        <div style="flex:1; background:#111; color:white; padding:20px; border-radius:10px; text-align:center;">
-            <h3>Est. Remaining Cost</h3><h2>${int(est_remaining_cost)}</h2>
+        <div style="flex:1; background:#d62728; color:white; padding:20px; border-radius:10px; text-align:center;">
+            <h4>Est. Remaining Cost</h4><h2>${int(est_remaining_cost)}</h2>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
     st.divider()
 
-    # FAA Progress Bars
+    # FAA Progress with circular gauges
     st.subheader("FAA Requirement Progress")
-    def color_progress(value,max_value):
-        percent=value/max_value
-        if percent>=1: color="green"
-        elif percent>=0.5: color="yellow"
-        else: color="red"
-        st.markdown(f"{value}/{max_value} hrs - <span style='color:{color};'>●</span>", unsafe_allow_html=True)
-        st.progress(min(percent,1.0))
-
-    color_progress(dual_hours, FAA_DUAL)
-    color_progress(solo_hours, FAA_SOLO)
-    color_progress(xc_hours, FAA_XC)
-    color_progress(night_hours, FAA_NIGHT)
-    color_progress(total_hours, FAA_TOTAL)
+    progress_data = {
+        "Category":["Dual","Solo","XC","Night","Total"],
+        "Completed":[dual_hours, solo_hours, xc_hours, night_hours, total_hours],
+        "Target":[FAA_DUAL, FAA_SOLO, FAA_XC, FAA_NIGHT, FAA_TOTAL]
+    }
+    progress_df = pd.DataFrame(progress_data)
+    for idx,row in progress_df.iterrows():
+        fig = px.pie(
+            names=["Completed","Remaining"],
+            values=[row["Completed"], max(row["Target"]-row["Completed"],0)],
+            hole=0.6,
+            title=f"{row['Category']} ({row['Completed']}/{row['Target']} hrs)"
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
     st.divider()
 
     # Flight type distribution chart
     if not df.empty:
-        fig = px.pie(df, names="flight_type", values="duration", title="Flight Type Distribution")
-        st.plotly_chart(fig, use_container_width=True)
+        fig1 = px.pie(df, names="flight_type", values="duration", title="Flight Type Distribution")
+        st.plotly_chart(fig1, use_container_width=True)
 
-        # Cumulative hours over time
         df_sorted = df.sort_values("date")
         df_cum = df_sorted.groupby("date")["duration"].sum().cumsum().reset_index()
         fig2 = px.line(df_cum, x="date", y="duration", title="Cumulative Hours Over Time")
@@ -146,7 +141,7 @@ if page=="Dashboard":
 # Log Flight
 # -------------------------
 if page=="Log Flight":
-    st.header("Log New Flight")
+    st.header("📝 Log New Flight")
     with st.form("flight_form"):
         col1,col2 = st.columns(2)
         with col1:
@@ -178,7 +173,7 @@ if page=="Log Flight":
 # Editable Flight Log
 # -------------------------
 if page=="Flight Log":
-    st.header("Flight Log")
+    st.header("📋 Flight Log")
     if not df.empty:
         df_sorted = df.sort_values("date", ascending=False)
         for idx,row in df_sorted.iterrows():
@@ -209,7 +204,7 @@ if page=="Flight Log":
 # Reports
 # -------------------------
 if page=="Reports":
-    st.header("Reports")
+    st.header("📄 Reports")
     if not df.empty:
         csv = df.drop(columns=["id"]).to_csv(index=False).encode("utf-8")
         st.download_button("Download CSV", csv, "flight_log.csv", "text/csv")
